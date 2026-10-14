@@ -234,20 +234,23 @@ class Engine:
         self.risk.resume()
         return {"halted": self.risk.halted}
 
-    def run_forever(self, cycles: int | None = None, sleep_seconds: int | None = None):
-        interval = sleep_seconds or self.config.poll_seconds
+    def run_forever(self, cycles: int | None = None, sleep_seconds: int | None = None, logger=None):
+        interval = sleep_seconds if sleep_seconds is not None else self.config.poll_seconds
+        emit = logger.info if logger else print
         count = 0
         while cycles is None or count < cycles:
             try:
                 result = self.cycle()
                 status = "HALTED" if result.halted else "ok"
-                print(f"[cycle {result.cycle}] {status} equity={result.account.equity:,.2f} "
-                      f"exposure={result.account.exposure:,.2f}")
+                emit(
+                    "cycle %s %s equity=%.2f exposure=%.2f",
+                    result.cycle, status, result.account.equity, result.account.exposure,
+                )
                 for decision in result.decisions:
-                    print(f"    {decision}")
+                    emit("    %s", decision)
             except Exception as exc:
                 self.risk.halt(HaltReason.BROKER_DOWN, f"cycle error: {exc}")
-                print(f"[cycle {count + 1}] error: {exc}")
+                emit("cycle %s error: %s", count + 1, exc)
             count += 1
             if cycles is None or count < cycles:
                 time.sleep(interval)

@@ -229,6 +229,7 @@ stratbot/            Phase 1: paper trading engine
   risk.py            every hard cap, kill switch
   reconciler.py      ledger vs broker truth
   engine.py          the loop
+  analysis.py        Phase 3: regimes, run summary, not-yet-conclusive gate
   api.py             FastAPI surface, also serves the dashboard
   broker/
     paper.py         simulated fills (the only adapter that exists)
@@ -242,7 +243,10 @@ dashboard/           Phase 2: PWA
 
 run_lab.py           strategy lab entry point
 run_bot.py           paper engine and dashboard server
-tests/               74 tests
+analyse_run.py       Phase 3 analysis
+scripts/
+  install_task.ps1   Windows scheduled task for continuous running
+tests/               89 tests
 ```
 
 ## Scope
@@ -254,16 +258,82 @@ tests/               74 tests
 
 ## Next steps
 
-1. **Run the paper engine for weeks** (Phase 3) and compare against buy-and-hold.
-   This is the real test; the backtest was inconclusive. The dashboard is ready
-   to watch it happen.
+1. **Run the paper engine for weeks** (Phase 3) and check `analyse_run.py`
+   weekly. This is the real test; the backtest was inconclusive. The tooling
+   and the dashboard are ready to watch it happen.
 2. **Widen the universe and lengthen the window** before tuning any parameter.
    Parameter tuning on 4 trades is guaranteed overfitting.
-3. **Phase 4 is gated.** Live trading additionally needs a broker decision:
-   Zerodha Kite Connect charges ₹500/month for market data and requires a static
-   IP for order placement, awkward on residential broadband. Angel One, Upstox,
-   Fyers and Dhan offer free APIs. For crypto, Binance is FIU-IND registered but
-   requires IP-restricted API keys.
+3. **Phase 4 stays gated** until the run beats buy-and-hold on live paper.
+
+## Phase 3: running the evidence
+
+The strategy lab found no edge, so the only thing left that can settle the
+question is a live paper run over weeks. That waiting cannot be shortened, but
+the measurement tooling for it is built.
+
+### Start it running
+
+```powershell
+.\scripts\install_task.ps1          # registers a Windows scheduled task
+Start-ScheduledTask -TaskName StratBotPaper
+```
+
+The task starts at logon, restarts on failure, and keeps going when you close the
+terminal. Output goes to `logs/engine.log` (rotating, 5 MB × 10).
+
+Or just run it in the foreground:
+
+```powershell
+.\.venv\Scripts\python run_bot.py --forever --sleep 900
+```
+
+`--serve` can run alongside it on the same database, so the dashboard shows a
+live bot.
+
+### Check whether the run means anything
+
+```powershell
+.\.venv\Scripts\python analyse_run.py
+```
+
+This compares the live paper run against buy-and-hold over the *same* window,
+reports which market regimes the run actually covered, and flags divergence
+from the Phase 0 backtest. Example on a fresh run:
+
+```
+VERDICT: NOT YET CONCLUSIVE
+  - only 0 days of history, need 14
+  - only 0 closed trades, need 20
+  - seen 1 market regime(s), need 3
+```
+
+The tool is built to refuse to call a short or quiet run a success. It reports
+`BEATING BUY-AND-HOLD` only after 14+ days, 20+ closed trades, and 3+ distinct
+market regimes.
+
+### Market regime coverage
+
+A run that only ever saw one trending market proves nothing. `analysis.classify`
+labels each window as up/down/range crossed with high/low volatility, using
+trendiness (net move ÷ total path length) rather than raw direction — a market
+that travels far and ends where it started is a range, however violent the
+daily bars look.
+
+## Phase 4 is deliberately not built
+
+There is no live broker adapter in this repository, and adding one would
+contradict the project's own rule: a strategy must pass unseen data first. It
+has not. The gate to open it:
+
+- `analyse_run.py` reports `BEATING BUY-AND-HOLD` on live paper
+- the broker question is settled (see below)
+- limits are cut to a size whose total loss you would accept without thinking
+- paper and live credentials stay in separate stores, never in this repo
+
+Live trading additionally needs a broker decision: Zerodha Kite Connect charges
+₹500/month for market data and requires a static IP for order placement, awkward
+on residential broadband. Angel One, Upstox, Fyers and Dhan offer free APIs.
+For crypto, Binance is FIU-IND registered but requires IP-restricted API keys.
 
 An Android APK is a small optional follow-up; see
 [Converting to an Android APK](#converting-to-an-android-apk).
