@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Market data cache is regenerated on demand, never commit it
+data/cache/
+
+# Strategy lab output
+out/
+
+# Secrets - never commit broker or exchange credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
