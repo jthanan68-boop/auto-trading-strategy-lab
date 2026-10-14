@@ -1,0 +1,19 @@
+{
+  "name": "StratBot Dashboard",
+  "short_name": "StratBot",
+  "description": "Monitoring dashboard for the paper trading engine",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0b0e14",
+  "theme_color": "#0b0e14",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

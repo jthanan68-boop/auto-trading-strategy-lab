@@ -120,10 +120,7 @@ def run_backtest(
 
     for i in range(n - 1):
         history = frame.iloc[: i + 1]
-        try:
-            target = float(strategy.position(history))
-        except Exception:  # a broken strategy must not silently look profitable
-            raise
+        target = float(strategy.position(history))
 
         if math.isnan(target):
             target = weight  # NaN means "hold whatever we have"

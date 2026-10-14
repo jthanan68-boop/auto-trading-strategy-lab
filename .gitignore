@@ -6,10 +6,18 @@ venv/
 *.egg-info/
 .pytest_cache/
 
+# Dashboard
+dashboard/node_modules/
+dashboard/dist/
+*.tsbuildinfo
+.playwright-mcp/
+
 # Market data cache is regenerated on demand, never commit it
 data/cache/
 
-# Strategy lab output
+# Runtime ledgers and strategy lab output
+data/*.sqlite3
+data/*.sqlite3-*
 out/
 
 # Secrets - never commit broker or exchange credentials
