@@ -58,9 +58,16 @@ Useful flags:
 
 ```bash
 python run_lab.py --symbols BTC,TCS     # a subset
+python run_lab.py --full                # all 44 instruments; far more trades
 python run_lab.py --dev-end 2023-01-01  # move the dev/test boundary
 python run_lab.py --refresh             # discard the cache and refetch
 ```
+
+The default 9-instrument set is for a quick look. `--full` runs 44 NIFTY
+constituents and indices — the Phase 0 verdict was that 9 instruments yielded
+only 3.6 out-of-sample trades per pair, too few to judge anything, so breadth is
+the fix rather than more strategy variants. Downloads are cached incrementally in
+`data/cache/`, so an interrupted `--full` run resumes where it stopped.
 
 Output lands in `out/`: `report.md`, `results.csv`, `equity_curves.png`.
 Price data is cached to `data/cache/` on first run and costs nothing.
@@ -230,8 +237,10 @@ stratbot/            Phase 1: paper trading engine
   reconciler.py      ledger vs broker truth
   engine.py          the loop
   analysis.py        Phase 3: regimes, run summary, not-yet-conclusive gate
+  live_gate.py       Phase 4: three-factor unlock that fails closed
   api.py             FastAPI surface, also serves the dashboard
   broker/
+    contract.py      behavioural tests every adapter must pass
     paper.py         simulated fills (the only adapter that exists)
     feed.py          free delayed bar feed
 
@@ -246,7 +255,7 @@ run_bot.py           paper engine and dashboard server
 analyse_run.py       Phase 3 analysis
 scripts/
   install_task.ps1   Windows scheduled task for continuous running
-tests/               89 tests
+tests/               115 tests
 ```
 
 ## Scope
@@ -264,6 +273,52 @@ tests/               89 tests
 2. **Widen the universe and lengthen the window** before tuning any parameter.
    Parameter tuning on 4 trades is guaranteed overfitting.
 3. **Phase 4 stays gated** until the run beats buy-and-hold on live paper.
+
+## Phase 4 readiness: built, live trading: not built
+
+A live broker adapter is deliberately absent, and adding one would contradict the
+project's own rule: a strategy must pass unseen data first. It has not.
+
+What is built is everything that must exist and be proven *before* a live
+adapter can be trusted.
+
+### The broker contract
+
+`stratbot/broker/contract.py` is a suite of behavioural tests every adapter must
+pass. It currently runs against the paper simulator — and already caught a real
+bug: an affordability clamp buffered cash by 0.1% while fees run 0.22% buy-side,
+so an oversized buy left cash a few paise negative. That class of bug is exactly
+what would cause an unfunded order at a broker.
+
+Any future adapter inherits the same tests, so a live adapter that has not
+demonstrated paper equivalence cannot reach the market.
+
+### The live gate
+
+`stratbot/live_gate.py` requires three independent factors before live trading
+is possible:
+
+- `STRATBOT_ALLOW_LIVE=yes-do-i-really-want-this` in the environment
+- a marker file at `data/LIVE_UNLOCK`
+- `--live` on the command line
+
+No subset unlocks it. A test asserts that two of the three leave it locked, and
+that a plain `true` or `1` does not count — only the exact phrase. The gate
+records each state change.
+
+### The gate to actually open it
+
+- `analyse_run.py` reports `BEATING BUY-AND-HOLD` on live paper
+- the broker question is settled (see below)
+- limits are cut to a size whose total loss you would accept without thinking
+- paper and live credentials stay in separate stores, never in this repo
+
+### Broker considerations, when the time comes
+
+Zerodha Kite Connect charges ₹500/month for market data and requires a static IP
+for order placement, awkward on residential broadband. Angel One, Upstox, Fyers
+and Dhan offer free APIs. For crypto, Binance is FIU-IND registered but requires
+IP-restricted API keys.
 
 ## Phase 3: running the evidence
 

@@ -42,7 +42,54 @@ UNIVERSE: list[Instrument] = [
     Instrument("ETH", "Ethereum", "crypto", "ETH-USD", annual_factor=365),
 ]
 
+def _equity(symbol: str, name: str) -> Instrument:
+    return Instrument(symbol, name, "equity", f"{symbol}.NS")
+
+
+# Widened after the Phase 0 verdict: 9 instruments produced only 3.6 out-of-sample
+# trades per pair, too few to separate an edge from noise. Breadth, not more
+# strategy variants, is the fix.
+NIFTY_BREADTH: list[Instrument] = [
+    _equity("ICICIBANK", "ICICI Bank"),
+    _equity("HINDUNILVR", "Hindustan Unilever"),
+    _equity("BHARTIARTL", "Bharti Airtel"),
+    _equity("BAJFINANCE", "Bajaj Finance"),
+    _equity("KOTAKBANK", "Kotak Mahindra Bank"),
+    _equity("LT", "Larsen & Toubro"),
+    _equity("AXISBANK", "Axis Bank"),
+    _equity("HCLTECH", "HCL Technologies"),
+    _equity("ASIANPAINT", "Asian Paints"),
+    _equity("MARUTI", "Maruti Suzuki"),
+    _equity("SUNPHARMA", "Sun Pharma"),
+    _equity("TITAN", "Titan Company"),
+    _equity("ULTRACEMCO", "UltraTech Cement"),
+    _equity("NTPC", "NTPC"),
+    _equity("POWERGRID", "Power Grid"),
+    _equity("TATAMOTORS", "Tata Motors"),
+    _equity("TATASTEEL", "Tata Steel"),
+    _equity("ADANIENT", "Adani Enterprises"),
+    _equity("ADANIPORTS", "Adani Ports"),
+    _equity("JSWSTEEL", "JSW Steel"),
+    _equity("TECHM", "Tech Mahindra"),
+    _equity("INDUSINDBK", "IndusInd Bank"),
+    _equity("HINDALCO", "Hindalco"),
+    _equity("BAJAJFINSV", "Bajaj Finserv"),
+    _equity("SBILIFE", "SBI Life"),
+    _equity("DRREDDY", "Dr Reddy's"),
+    _equity("CIPLA", "Cipla"),
+    _equity("EICHERMOT", "Eicher Motors"),
+    _equity("APOLLOHOSP", "Apollo Hospitals"),
+    _equity("GRASIM", "Grasim Industries"),
+    _equity("BRITANNIA", "Britannia"),
+    _equity("DIVISLAB", "Divi's Laboratories"),
+    _equity("HEROMOTOCO", "Hero MotoCorp"),
+    _equity("TATACONSUM", "Tata Consumer"),
+]
+
+UNIVERSE = UNIVERSE + NIFTY_BREADTH
+
 BY_SYMBOL = {i.symbol: i for i in UNIVERSE}
+BROAD_SYMBOLS = [i.symbol for i in NIFTY_BREADTH]
 
 
 def _cache_path(instrument: Instrument) -> Path:

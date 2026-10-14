@@ -25,16 +25,20 @@ OUT_DIR = Path(__file__).resolve().parent / "out"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Backtest strategies vs buy-and-hold.")
-    parser.add_argument(
-        "--symbols",
-        default=",".join(config.DEFAULT_SYMBOLS),
-        help="comma-separated instrument codes",
-    )
     parser.add_argument("--start", default=config.DATA_START)
     parser.add_argument("--dev-end", default=config.DEV_END)
     parser.add_argument("--cash", type=float, default=config.INITIAL_CASH)
     parser.add_argument("--refresh", action="store_true", help="refetch and rebuild the cache")
-    return parser.parse_args()
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="run the full NIFTY breadth set; slower, but produces far more trades",
+    )
+    parser.add_argument("--symbols", default=None, help="comma-separated instrument codes")
+    args = parser.parse_args()
+    if args.symbols is None:
+        args.symbols = ",".join(config.FULL_SYMBOLS if args.full else config.DEFAULT_SYMBOLS)
+    return args
 
 
 def fresh_strategy(strategy, bars: pd.DataFrame):

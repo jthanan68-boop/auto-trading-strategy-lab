@@ -72,13 +72,19 @@ class PaperBroker:
             notional = request.qty * price
             fees = cost.charges("BUY", notional)
             if notional + fees > self.cash:
-                affordable = self.cash / (price * 1.001)
+                # The buffer must exceed the fee rate, which is ~0.22% buy-side for
+                # India delivery. A 0.1% buffer leaves cash a few paise negative.
+                affordable = 0.0
+                for buffer in (1.01, 1.03, 1.06):
+                    affordable = self.cash / (price * buffer)
+                    notional = affordable * price
+                    fees = cost.charges("BUY", notional)
+                    if notional + fees <= self.cash:
+                        break
                 if affordable <= 0:
                     self.orders[order_id] = OrderStatus.REJECTED
                     return OrderStatus.REJECTED, None
                 request.qty = affordable
-                notional = affordable * price
-                fees = cost.charges("BUY", notional)
             self.cash -= notional + fees
             self._apply_fill(request.symbol, request.qty, price, add=True)
         else:
