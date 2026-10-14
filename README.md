@@ -9,32 +9,34 @@ a simulator. There is no live broker adapter, no credential reader, and a test
 (`test_no_live_credentials_are_readable_anywhere`) asserts those strings appear
 nowhere in the source.
 
-## Phase 0 result: no edge found
+## Phase 0 result: no edge, and breadth confirmed it
 
-Run against 9 instruments from 2018-01-01 to 2026-10-14, the honest out-of-sample
-verdict is:
+Run against **43 instruments** from 2018-01-01 to 2026-10-14 (Tata Motors was
+dropped: Yahoo returns an empty payload for every Tata Motors symbol it tries).
+Out-of-sample (2024 onward), across 215 strategy/instrument pairs:
 
 | | |
 |---|---|
-| Strategy/instrument pairs beating buy-and-hold | 23 of 45 (51%) |
-| Median excess return vs buy-and-hold | **+0.44 points** |
-| Average trades per pair, out-of-sample | **3.6** |
-| Wins that occurred while buy-and-hold was *losing* | 20 of 23 |
+| Pairs beating buy-and-hold | 65 of 215 (**30%**) |
+| **Median excess return** | **−12.36 points** |
+| Average trades per pair | 3.7 |
+| Wins while buy-and-hold was *falling* | 42 of 65 |
 
-A 51% hit rate with a +0.44 point median edge over 3–4 trades is noise, not
-skill. Nearly all the "wins" are the mechanical result of sitting in cash during
-a downtrend.
+The first lab run on 9 instruments returned a median excess of **+0.44 points**
+on 3.6 trades, which I reported as "no edge, indistinguishable from noise".
+Widening the universe was the right move: that figure was a small-sample fluke.
+On 43 instruments the median is **−12.36 points**, and 42 of the 65 wins are
+just the mechanical effect of sitting in cash during a downtrend.
 
-The in-sample/out-of-sample gap is the real finding: the same strategies scored
-**9 of 45 in-sample** and **23 of 45 out-of-sample**, and the strategies that
-looked spectacular in-sample (Donchian and SMA on BTC/ETH, +480 to +610 points of
-excess during the 2018-2023 crypto run) lost badly on unseen data (Donchian on
-BTC returned +17% against buy-and-hold's +87%). That is the signature of
-overfitting, and it is why no strategy has been promoted to live trading.
+That is now a shortfall, not noise. Every strategy in this set loses to simply
+holding the instrument it is trading, out-of-sample, with realistic costs.
+
+The in-sample numbers are worse still: 41 of 210, median −77 points. Nothing
+here was ever going to survive contact with unseen data.
 
 Phase 1 was built anyway, on the understanding that **a multi-week live paper
 run is better evidence than another backtest**. Infrastructure is ready; the
-strategy question is still open.
+strategy question is now firmly negative rather than merely unanswered.
 
 ## The original idea, and what happened to it
 

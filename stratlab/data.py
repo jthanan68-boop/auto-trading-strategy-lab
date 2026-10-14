@@ -65,7 +65,8 @@ NIFTY_BREADTH: list[Instrument] = [
     _equity("ULTRACEMCO", "UltraTech Cement"),
     _equity("NTPC", "NTPC"),
     _equity("POWERGRID", "Power Grid"),
-    _equity("TATAMOTORS", "Tata Motors"),
+    # TATAMOTORS is excluded: Yahoo returns an empty payload for TATAMOTORS.NS,
+    # TATAMOTORS.BO and TATAMOTOR.NS alike, so it never produces a bar.
     _equity("TATASTEEL", "Tata Steel"),
     _equity("ADANIENT", "Adani Enterprises"),
     _equity("ADANIPORTS", "Adani Ports"),

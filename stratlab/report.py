@@ -145,9 +145,16 @@ def write_report(
         ]
         if test_summary["median_excess"] < 5 or test_summary["mean_trades"] < 10:
             lines += [
-                "> **No strategy has demonstrated an edge.** A median excess near zero, on "
-                f"{test_summary['mean_trades']:.0f} trades per pair, is indistinguishable from "
-                "noise. Most apparent wins are the mechanical effect of holding cash during a "
+                "> **No strategy has demonstrated an edge.** "
+                f"Median excess return is {test_summary['median_excess']:+.2f} points on "
+                f"{test_summary['mean_trades']:.0f} trades per pair. "
+                + (
+                    "That is a shortfall, not an edge: the strategies lose to simply "
+                    "holding the instrument."
+                    if test_summary["median_excess"] < 0
+                    else "That is indistinguishable from noise."
+                )
+                + " Most apparent wins are the mechanical effect of holding cash during a "
                 "downtrend, which is not the same as finding an edge. Per the project's own "
                 "rule, this does not advance to live trading.",
                 "",
