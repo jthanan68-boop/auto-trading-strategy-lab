@@ -19,7 +19,8 @@
 [CmdletBinding()]
 param(
     [string]$TaskName = "StratBotPaper",
-    [string]$ProjectDir = (Split-Path -Parent $PSScriptRoot),
+    # $PSScriptRoot is empty under `-File` in some hosts, so fall back to $PWD.
+    [string]$ProjectDir = $(if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { (Get-Location).Path }),
     [int]$PollSeconds = 900
 )
 
@@ -55,14 +56,37 @@ $settings = New-ScheduledTaskSettingsSet `
 # Least privilege: this bot only needs to read market data and write its own files.
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
-Register-ScheduledTask `
-    -TaskName $TaskName `
-    -Action $action `
-    -Trigger @($trigger, $bootTrigger) `
-    -Settings $settings `
-    -Principal $principal `
-    -Description "StratBot paper trading engine (simulation only, places no real orders)" `
-    -Force | Out-Null
+# Registering a scheduled task requires elevation on most Windows configurations,
+# so try unelevated first and only re-run as Administrator if that is refused.
+$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $elevated) {
+    Write-Warning "Not running elevated. Registering a scheduled task will likely fail."
+    Write-Warning "Re-run from an Administrator PowerShell, or use -StartNow for a non-persistent run."
+}
+
+$triggers = if ($elevated) { @($trigger, $bootTrigger) } else { @($trigger) }
+
+try {
+    Register-ScheduledTask `
+        -TaskName $TaskName `
+        -Action $action `
+        -Trigger $triggers `
+        -Settings $settings `
+        -Principal $principal `
+        -Description "StratBot paper trading engine (simulation only, places no real orders)" `
+        -Force | Out-Null
+} catch {
+    Write-Host ""
+    Write-Host "Could not register the scheduled task: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Open PowerShell as Administrator and re-run this script." -ForegroundColor Yellow
+    Write-Host "Or start the bot right now without a scheduled task:" -ForegroundColor Yellow
+    Write-Host "    .\.venv\Scripts\python.exe run_bot.py --forever --sleep 900" -ForegroundColor Cyan
+    Write-Host "Keep that window open; the bot stops when you close it." -ForegroundColor Yellow
+    exit 1
+}
 
 Write-Host "Installed scheduled task '$TaskName'." -ForegroundColor Green
 Write-Host "  python : $python"
