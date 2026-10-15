@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 from logging.handlers import RotatingFileHandler
+from dataclasses import replace
 from pathlib import Path
 
 from stratbot.config import CONFIG, DB_PATH
@@ -49,6 +50,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db", default=str(DB_PATH), help="SQLite path")
     parser.add_argument("--cycles", type=int, default=1, help="cycles to run then exit")
     parser.add_argument("--sleep", type=int, default=0, help="seconds between cycles")
+    parser.add_argument("--strategy", default=CONFIG.strategy_name,
+                        choices=["donchian-55/20", "sma-20/100", "buy-and-hold"],
+                        help="strategy to run")
     parser.add_argument("--serve", action="store_true", help="start the FastAPI server")
     parser.add_argument("--forever", action="store_true", help="run until stopped")
     parser.add_argument("--host", default="127.0.0.1")
@@ -75,7 +79,7 @@ def main() -> int:
         uvicorn.run(create_app(db=db), host=args.host, port=args.port, log_level="info")
         return 0
 
-    config = CONFIG
+    config = replace(CONFIG, strategy_name=args.strategy)
     db = Database(Path(args.db))
     engine = Engine(config, db)
 

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from stratlab import data as price_data
 from stratlab.strategies.library import BuyAndHold, DonchianBreakout, SmaCrossover
 
-from .broker.feed import fetch_bars
+from .broker.feed import current_bars
 from .broker.paper import BrokerUnavailable, PaperBroker
 from .config import BotConfig
 from .db import Database
@@ -112,9 +112,8 @@ class Engine:
         self.cycle_count += 1
         decisions: list[str] = []
 
-        yahoo_map = {s: price_data.BY_SYMBOL[s].yfinance_symbol for s in self.config.symbols}
         try:
-            bars = fetch_bars(yahoo_map)
+            bars = current_bars(self.config.symbols)
         except Exception as exc:
             self.risk.halt(HaltReason.BROKER_DOWN, f"feed down: {exc}")
             bars = {}

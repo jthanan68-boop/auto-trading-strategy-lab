@@ -50,7 +50,11 @@ class Bar:
 
     @property
     def age_seconds(self) -> float:
-        return (utcnow() - self.ts).total_seconds()
+        # Replayed bars carry naive timestamps from pandas; normalise before
+        # comparing, or the subtraction raises on mixed awareness.
+        now = utcnow()
+        ts = self.ts if self.ts.tzinfo else self.ts.replace(tzinfo=now.tzinfo)
+        return (now - ts).total_seconds()
 
 
 @dataclass

@@ -73,3 +73,37 @@ def fetch_bars(mapping: dict[str, str], retries: int = 3) -> dict[str, Bar]:
         except Exception:
             continue
     return out
+
+
+def current_bars(symbols) -> dict[str, Bar]:
+    """Latest bar per symbol, taken from the same series the strategy reads.
+
+    The chart endpoint and the download endpoint disagree by several days for NSE
+    names, and the chart copy is the staler of the two. Mixing them let the risk
+    layer halt on data the strategy itself considered current, so both now come
+    from the cached history.
+    """
+    from stratlab import data as price_data
+
+    out: dict[str, Bar] = {}
+    for symbol in symbols:
+        instrument = price_data.BY_SYMBOL.get(symbol)
+        if instrument is None:
+            continue
+        try:
+            frame = price_data.load(instrument)
+        except Exception:
+            continue
+        if frame.empty:
+            continue
+        last = frame.iloc[-1]
+        out[symbol] = Bar(
+            symbol=symbol,
+            ts=pd.Timestamp(frame.index[-1]).to_pydatetime(),
+            open=float(last["open"]),
+            high=float(last["high"]),
+            low=float(last["low"]),
+            close=float(last["close"]),
+            volume=float(last.get("volume", 0.0) or 0.0),
+        )
+    return out

@@ -77,24 +77,43 @@ def test_same_inputs_produce_the_same_order_id():
     assert order(side=Side.BUY, bar_ts=ts).client_order_id != order(side=Side.SELL, bar_ts=ts).client_order_id
 
 
-def test_position_cap_blocks_and_halts(db, bar):
+def test_position_cap_blocks_but_does_not_halt(db, bar):
+    """Reaching the cap is normal. Halting would latch the bot off for good."""
     limits = RiskLimits(max_position_value=10_000, max_total_exposure=1_000_000)
     risk = RiskManager(db, limits)
     existing = Position(symbol="BTC", qty=100, avg_price=100, last_price=100)
     decision = risk.check(order(qty=10), account(positions={"BTC": existing}), bar)
     assert not decision.approved
-    assert decision.halt is HaltReason.POSITION_CAP
-    assert risk.halted
+    assert decision.halt is None
+    assert not risk.halted, "a full position must not stop the bot trading"
 
 
-def test_exposure_cap_blocks(db, bar):
-    # Exposure is already fully committed, so there is no headroom left.
+def test_a_capped_bot_can_still_sell(db, bar):
+    limits = RiskLimits(max_position_value=10_000, max_total_exposure=1_000_000)
+    risk = RiskManager(db, limits)
+    existing = Position(symbol="BTC", qty=100, avg_price=100, last_price=100)
+    risk.check(order(qty=10), account(positions={"BTC": existing}), bar)
+    exit_order = order(side=Side.SELL, qty=100)
+    decision = risk.check(exit_order, account(positions={"BTC": existing}), bar)
+    assert decision.approved, "being at the cap must never block a sell"
+
+
+def test_exposure_cap_blocks_but_does_not_halt(db, bar):
     limits = RiskLimits(max_position_value=1_000_000, max_total_exposure=10_000)
     risk = RiskManager(db, limits)
     held = Position(symbol="ETH", qty=10, avg_price=1000, last_price=1000)
     decision = risk.check(order(qty=10), account(positions={"ETH": held}), bar)
     assert not decision.approved
-    assert decision.halt is HaltReason.EXPOSURE_CAP
+    assert decision.halt is None
+    assert not risk.halted
+
+
+def test_exposure_cap_is_enforced_across_symbols(db, bar):
+    limits = RiskLimits(max_position_value=1_000_000, max_total_exposure=10_000)
+    risk = RiskManager(db, limits)
+    held = Position(symbol="ETH", qty=10, avg_price=1000, last_price=1000)
+    decision = risk.check(order(symbol="BTC", qty=10), account(positions={"ETH": held}), bar)
+    assert not decision.approved
 
 
 def test_order_is_shrunk_rather_than_refused_when_there_is_headroom(db, bar):

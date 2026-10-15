@@ -112,14 +112,19 @@ class RiskManager:
             )
             current_value = abs(existing.market_value)
             headroom = cap - current_value
+            # Sitting at the cap is the cap working, not a fault. Refuse the order
+            # but keep trading: halting here would latch the bot off permanently
+            # the first time any position reached its limit.
             if headroom <= 0:
-                self.halt(HaltReason.POSITION_CAP, f"{request.symbol} at position cap")
-                return RiskDecision(False, "position value cap reached", HaltReason.POSITION_CAP)
+                self.db.log_risk_event(
+                    "order_rejected", f"{request.symbol} at position cap ({current_value:,.0f})"
+                )
+                return RiskDecision(False, "position value cap reached")
 
             exposure_headroom = self.limits.max_total_exposure - account.exposure
             if exposure_headroom <= 0:
-                self.halt(HaltReason.EXPOSURE_CAP, "total exposure cap reached")
-                return RiskDecision(False, "total exposure cap reached", HaltReason.EXPOSURE_CAP)
+                self.db.log_risk_event("order_rejected", "total exposure cap reached")
+                return RiskDecision(False, "total exposure cap reached")
 
             allowed_value = min(headroom, exposure_headroom, request.qty * price)
             allowed_qty = allowed_value / price

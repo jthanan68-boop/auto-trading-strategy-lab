@@ -45,7 +45,7 @@ def db_and_engine(tmp_path, monkeypatch):
     history = rising_history()
     bar = Bar(symbol="BTC", ts=utcnow(), open=200, high=200, low=200, close=200)
 
-    monkeypatch.setattr(engine_module, "fetch_bars", lambda mapping: {"BTC": bar})
+    monkeypatch.setattr(engine_module, "current_bars", lambda mapping: {"BTC": bar})
     monkeypatch.setattr(engine, "_history", lambda symbol: history)
     return engine
 
@@ -116,7 +116,7 @@ def test_daily_loss_limit_stops_further_buying(tmp_path, monkeypatch):
     )
     engine = engine_module.Engine(config, db, broker=PaperBroker(config.initial_cash))
     bar = Bar(symbol="BTC", ts=utcnow(), open=200, high=200, low=200, close=200)
-    monkeypatch.setattr(engine_module, "fetch_bars", lambda mapping: {"BTC": bar})
+    monkeypatch.setattr(engine_module, "current_bars", lambda mapping: {"BTC": bar})
     monkeypatch.setattr(engine, "_history", lambda symbol: rising_history())
 
     engine.db.set_state("day_start", utcnow().date().isoformat())
@@ -140,7 +140,7 @@ def test_stale_feed_data_stops_trading(tmp_path, monkeypatch):
     engine = engine_module.Engine(config, db, broker=PaperBroker(config.initial_cash))
 
     stale = Bar(symbol="BTC", ts=utcnow() - timedelta(days=5), open=200, high=200, low=200, close=200)
-    monkeypatch.setattr(engine_module, "fetch_bars", lambda mapping: {"BTC": stale})
+    monkeypatch.setattr(engine_module, "current_bars", lambda mapping: {"BTC": stale})
     monkeypatch.setattr(engine, "_history", lambda symbol: rising_history())
 
     result = engine.cycle()
@@ -161,7 +161,7 @@ def test_empty_feed_response_halts_rather_than_trading_blindly(tmp_path, monkeyp
     def boom(mapping):
         raise RuntimeError("feed down")
 
-    monkeypatch.setattr(engine_module, "fetch_bars", boom)
+    monkeypatch.setattr(engine_module, "current_bars", boom)
     result = engine.cycle()
     assert result.halted
     assert result.bars == {}
