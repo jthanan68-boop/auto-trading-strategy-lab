@@ -53,6 +53,9 @@ class Engine:
         self.db = db
         self.broker = broker or PaperBroker(config.initial_cash)
         self.risk = RiskManager(db, config.limits)
+        from stratlab.costs import cost_model_for
+
+        self.cost_model = cost_model_for("crypto" if "BTC" in config.symbols else "equity")
         self.strategies = {
             symbol: STRATEGY_BUILDERS[config.strategy_name]() for symbol in config.symbols
         }
@@ -77,7 +80,7 @@ class Engine:
     def _execute(self, request: OrderRequest, bar: Bar, bypass_risk: bool = False) -> str:
         if not bypass_risk:
             account = self.broker.get_account()
-            decision = self.risk.check(request, account, bar)
+            decision = self.risk.check(request, account, bar, self.cost_model)
             if not decision.approved:
                 self._record(request, OrderStatus.REJECTED, decision.reason)
                 self.db.log_risk_event("order_rejected", f"{request.symbol} {request.side.value}: {decision.reason}")
@@ -213,6 +216,11 @@ class Engine:
         # 4. Unresolved orders halt the bot.
         self.risk.check_unknown_orders()
 
+        # Re-mark after trading. Positions opened this cycle were marked at their
+        # fill price, so snapshotting without this reports them as freshly bought
+        # with zero unrealised P/L, which contradicts every later snapshot.
+        account = self.broker.get_account()
+        self.broker.mark(prices)
         account = self.broker.get_account()
         self.db.record_equity(account.equity, account.cash, account.exposure, account.unrealised)
         return CycleResult(self.cycle_count, bars, account, decisions, self.risk.halted, self._reason())

@@ -66,6 +66,9 @@ class PaperBroker:
 
         cost = cost_model_for("crypto" if request.symbol in {"BTC", "ETH"} else "equity")
         reference = bar_close if bar_close > 0 else request.reference_price
+        # Slippage is applied once, here. The risk layer sizes quantities at the
+        # fill price rather than the reference, so charging it again downstream
+        # made every fill ~0.05% dearer than the exposure cap allowed.
         price = cost.fill_price(reference, request.side.value)
 
         if request.side.value == "BUY":
@@ -95,7 +98,6 @@ class PaperBroker:
                     self.orders[order_id] = OrderStatus.REJECTED
                     return OrderStatus.REJECTED, None
                 request.qty = sellable
-                price = cost.fill_price(reference, "SELL")
             notional = request.qty * price
             fees = cost.charges("SELL", notional)
             self.cash += notional - fees

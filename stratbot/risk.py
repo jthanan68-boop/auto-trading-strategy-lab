@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 
+from stratlab.costs import CostModel
+
 from .config import RiskLimits
 from .db import Database
 from .models import (
@@ -65,7 +67,13 @@ class RiskManager:
         self.db.log_risk_event("resumed", "halt cleared by operator")
 
     # ---- pre-trade checks ----------------------------------------------
-    def check(self, request: OrderRequest, account: AccountState, bar: Bar) -> RiskDecision:
+    def check(
+        self,
+        request: OrderRequest,
+        account: AccountState,
+        bar: Bar,
+        cost: CostModel | None = None,
+    ) -> RiskDecision:
         if self.halted:
             return RiskDecision(False, f"bot halted: {self.halt_reason.value}")
 
@@ -121,19 +129,39 @@ class RiskManager:
                 )
                 return RiskDecision(False, "position value cap reached")
 
+            # Size against the price the order will actually fill at. Sizing on the
+            # reference close and filling slipped overshoots the cap by the spread
+            # on every fill, which is how exposure reached 300,029.94 on a
+            # 300,000 cap.
+            # Defaults to zero slippage when no cost model is supplied, which
+            # keeps sizing conservative rather than optimistic.
+            fill_price = cost.fill_price(price, "BUY") if cost else price
             exposure_headroom = self.limits.max_total_exposure - account.exposure
             if exposure_headroom <= 0:
                 self.db.log_risk_event("order_rejected", "total exposure cap reached")
                 return RiskDecision(False, "total exposure cap reached")
 
-            allowed_value = min(headroom, exposure_headroom, request.qty * price)
-            allowed_qty = allowed_value / price
+            # Cap the notional at the caller's intended notional, measured on the
+            # reference close, then convert to a quantity at the fill price. Using
+            # fill price in this min() would let the cap be exceeded by the spread,
+            # because the requested quantity already embeds the reference price.
+            # Hard ceiling: the quantity returned must satisfy
+            #   current exposure + qty * fill_price <= max_total_exposure
+            # computed at the price actually paid. Deriving it from the cap
+            # headroom alone leaked a few rupees per order, which compounded into
+            # a 20-point breach across a full book.
+            requested_value = request.qty * price
+            affordable_value = min(headroom, requested_value, self.limits.max_total_exposure)
+            allowed_value = min(affordable_value, exposure_headroom)
+            allowed_qty = max(0.0, allowed_value) / fill_price
             if allowed_value < self.limits.min_order_value:
                 return RiskDecision(False, "remaining headroom below minimum order size")
-            if allowed_qty < request.qty:
-                return RiskDecision(
-                    True, "quantity reduced by cap", allowed_qty=allowed_qty
-                )
+
+            # Always hand back the fill-priced quantity. The caller sized its
+            # request on the reference close, so passing the original quantity
+            # through would fill more than asked for on every order that happens
+            # to fit under the caps.
+            return RiskDecision(True, "sized to fill price", allowed_qty=allowed_qty)
 
         return RiskDecision(True)
 
