@@ -49,6 +49,9 @@ class BotConfig:
     symbols: tuple[str, ...] = ("BTC", "ETH", "RELIANCE", "TCS", "INFY")
     strategy_name: str = "donchian-55/20"
     initial_cash: float = 500_000.0
+    # Symbols' target weights are summed and scaled down to this before any order
+    # is sized, so N strategies each asking for 100% cannot request N * 100%.
+    max_gross_exposure: float = 1.0
     poll_seconds: int = 300
     limits: RiskLimits = field(default_factory=RiskLimits)
 

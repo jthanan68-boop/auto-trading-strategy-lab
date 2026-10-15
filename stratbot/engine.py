@@ -140,6 +140,15 @@ class Engine:
 
         # 3. Strategy signals, each through the risk gate.
         if not self.risk.halted:
+            account = self.broker.get_account()
+            equity = account.equity if account.equity > 0 else 1.0
+
+            # Collect every intent first. A strategy target is a weight for that
+            # symbol, so five symbols all asking for 1.0 would request 500% of
+            # equity; they have to be normalised against each other before any
+            # order is sized, otherwise each symbol keeps bidding for the whole
+            # account and re-issuing orders every cycle.
+            intents: list[tuple[str, Bar, float, float]] = []
             for symbol, bar in bars.items():
                 strategy = self.strategies.get(symbol)
                 if strategy is None:
@@ -154,18 +163,35 @@ class Engine:
                 if target != target:  # NaN means hold
                     continue
 
-                account = self.broker.get_account()
                 held = account.positions.get(symbol)
                 held_qty = held.qty if held else 0.0
-                current_weight = (held_qty * bar.close / account.equity) if account.equity > 0 else 0.0
+                current_weight = held_qty * bar.close / equity
+                intents.append((symbol, bar, min(max(target, 0.0), 1.0), current_weight))
 
-                if abs(target - current_weight) < 0.02:
+            gross = sum(target for _, _, target, _ in intents)
+            # The achievable ceiling is whichever binds first: the configured
+            # gross limit, or whatever the total-exposure cap actually allows on
+            # the current equity. Sizing to the larger of the two starves every
+            # symbol past the cap, which re-issues the same blocked order forever.
+            affordable = self.config.limits.max_total_exposure / equity
+            gross_cap = min(self.config.max_gross_exposure, affordable)
+            scale = 1.0
+            if gross > gross_cap and gross > 0:
+                scale = gross_cap / gross
+                decisions.append(
+                    f"targets requested {gross:.2f} of equity, scaled to "
+                    f"{gross_cap:.2f} across {len(intents)} symbols"
+                )
+
+            for symbol, bar, target, current_weight in intents:
+                scaled = target * scale
+                if abs(scaled - current_weight) < 0.01:
                     continue
 
-                side = Side.BUY if target > current_weight else Side.SELL
-                qty = abs(target - current_weight) * account.equity / bar.close
+                side = Side.BUY if scaled > current_weight else Side.SELL
+                qty = abs(scaled - current_weight) * equity / bar.close
                 if side is Side.SELL:
-                    qty = min(qty, held_qty)
+                    qty = min(qty, current_weight * equity / bar.close)
                 if qty <= 0:
                     continue
 
@@ -175,11 +201,11 @@ class Engine:
                     qty=qty,
                     strategy=self.config.strategy_name,
                     signal_bar_ts=bar.ts,
-                    reason=f"target {target:.2f} vs current {current_weight:.2f}",
+                    reason=f"target {scaled:.4f} vs current {current_weight:.4f}",
                     reference_price=bar.close,
                 )
                 self.db.log_signal(
-                    self.config.strategy_name, symbol, side.value, target, bar.close, bar.ts, request.reason
+                    self.config.strategy_name, symbol, side.value, scaled, bar.close, bar.ts, request.reason
                 )
                 outcome = self._execute(request, bar)
                 decisions.append(f"{symbol} {side.value} {qty:.6f} -> {outcome}")

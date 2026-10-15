@@ -55,10 +55,20 @@ def main() -> int:
     lines.append(f"cycles      : {len(equity)}")
 
     lines += section("1. RESULT SUMMARY")
-    lines.append(f"  start equity        : {money(start)}")
+    if equity:
+        # The first recorded equity already includes cycle-1 fees, so using it as
+        # the baseline understates the loss. Recover the true opening balance from
+        # the cash the ledger started with.
+        opening = float(equity[0]["cash"]) + sum(
+            float(f["qty"]) * float(f["price"]) + float(f["fees"]) for f in fills
+        )
+        lines.append(f"  opening balance     : {money(opening)}   (derived, includes cycle-1 fees)")
+    lines.append(f"  first recorded eq   : {money(start)}")
     lines.append(f"  end equity          : {money(end)}")
-    lines.append(f"  change              : {end - start:+,.2f}")
-    lines.append(f"  return              : {(end / start - 1) * 100:+.2f}%" if start else "  return              : n/a")
+    lines.append(f"  change              : {end - opening:+,.2f}   (from opening balance, AFTER fees)")
+    lines.append(f"  return              : {(end / opening - 1) * 100:+.2f}%" if opening else "  return              : n/a")
+    lines.append(f"  fees paid           : {money(total_fees)}")
+    lines.append(f"  gross P/L ex fees   : {(end - opening) + total_fees:+,.2f}")
     lines.append(f"  cash                : {money(equity[-1]['cash']) if equity else 'n/a'}")
     lines.append(f"  exposure            : {money(equity[-1]['exposure']) if equity else 'n/a'}")
     lines.append(f"  unrealised P/L      : {money(equity[-1]['unrealised']) if equity else 'n/a'}")
