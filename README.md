@@ -38,6 +38,55 @@ Phase 1 was built anyway, on the understanding that **a multi-week live paper
 run is better evidence than another backtest**. Infrastructure is ready; the
 strategy question is now firmly negative rather than merely unanswered.
 
+## Why they lost
+
+`python diagnose.py` breaks the result down rather than restating it:
+
+| | Median excess | Hit rate |
+|---|---|---|
+| Market **rose** (150 pairs) | **−25.64 points** | 15% |
+| Market **fell** (60 pairs) | +8.38 points | 70% |
+
+Time-in-market is *not* the explanation — `correlation(exposure, excess) = -0.00`.
+The rule is not simply holding too much cash. It is systematically missing upside
+while collecting downside, which is what a confirmation-based signal does.
+
+160 of 210 pairs achieved a shallower drawdown than buy-and-hold, but still
+returned a median −10.02 points. Reduced risk without a return for it.
+
+## Cross-sectional rules also fail
+
+The diagnosis pointed at a specific fix: stop trading one instrument at a time,
+rank them against each other, stay invested. `run_xs.py` implements that as a
+portfolio backtester with monthly rebalancing.
+
+| Rule (top-10 of 42) | Out-of-sample return | vs equal-weight B&H |
+|---|---|---|
+| xs-mom 63/21 | +0.96% | −18.03 pts |
+| xs-mom 252/21 | +7.84% | −11.15 pts |
+| xs-lowvol 126 | −9.77% | −28.76 pts |
+| xs-mom 126/21 | −33.80% | −52.79 pts |
+
+**0 of 6 beat buy-and-hold.** Median excess −29.57 points.
+
+### And it is not a cost problem
+
+These rules traded ~430 times, at 0.322% a round trip, so friction was the
+obvious suspect. It is not:
+
+| | Return | vs B&H |
+|---|---|---|
+| equal-weight buy-and-hold | +18.99% | — |
+| xs-mom 126/21, **real costs** | −33.92% | −52.91 pts |
+| xs-mom 126/21, **zero costs** | −31.18% | −50.17 pts |
+
+Removing every rupee of cost recovers **2.7 of 52 points**. The signal has no
+value on its own; friction is a rounding error next to that.
+
+Two strategy families, one ruled by "up when the graph rises", one from academic
+cross-sectional momentum literature, both lose by a wide margin. That points away
+from tuning and toward the question the project was really about.
+
 ## The original idea, and what happened to it
 
 The brief was: *buy when the graph goes up, sell when it goes down.* That rule is
@@ -228,8 +277,11 @@ stratlab/            Phase 0: research
   indicators.py      causal SMA / Wilder RSI / ATR
   data.py            Yahoo Finance loading with a CSV cache
   backtest.py        event loop, next-bar fills, metrics
+  portfolio.py       multi-instrument backtester with rebalancing
   report.py          markdown, CSV and chart output
-  strategies/        buy-and-hold, SMA crossover, RSI, Donchian, buy-the-dip
+  strategies/
+    library.py       buy-and-hold, SMA crossover, RSI, Donchian, buy-the-dip
+    cross_sectional.py  momentum and low-volatility ranking rules
 
 stratbot/            Phase 1: paper trading engine
   config.py          risk limits and universe
@@ -252,12 +304,14 @@ dashboard/           Phase 2: PWA
   src/components/    equity chart, candlestick chart, tables, risk log
   capacitor.config.ts  conversion-ready APK config
 
-run_lab.py           strategy lab entry point
+run_lab.py           single-instrument backtest lab
+run_xs.py            cross-sectional portfolio backtest
+diagnose.py          why the strategies lost, decomposed
 run_bot.py           paper engine and dashboard server
 analyse_run.py       Phase 3 analysis
 scripts/
   install_task.ps1   Windows scheduled task for continuous running
-tests/               115 tests
+tests/               125 tests
 ```
 
 ## Scope
