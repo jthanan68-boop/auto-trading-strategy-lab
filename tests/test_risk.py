@@ -124,12 +124,31 @@ def test_cap_shaved_to_dust_is_refused(db, bar):
 
 
 def test_stale_bar_halts_the_bot(db):
-    risk = RiskManager(db, RiskLimits(max_bar_age_seconds=60))
-    stale = Bar(symbol="BTC", ts=utcnow() - timedelta(hours=3), open=1, high=1, low=1, close=100)
+    risk = RiskManager(db, RiskLimits(max_bar_age_days=4))
+    stale = Bar(symbol="BTC", ts=utcnow() - timedelta(days=6), open=1, high=1, low=1, close=100)
     decision = risk.check(order(), account(), stale)
     assert not decision.approved
     assert decision.halt is HaltReason.STALE_PRICE
     assert risk.halt_reason is HaltReason.STALE_PRICE
+
+
+def test_a_daily_bar_a_few_hours_old_is_not_stale(db):
+    """Daily candles are hours old by design; only a dead feed should halt."""
+    risk = RiskManager(db, RiskLimits(max_bar_age_days=4))
+    recent = Bar(symbol="BTC", ts=utcnow() - timedelta(hours=10), open=1, high=1, low=1, close=100)
+    decision = risk.check(order(qty=10), account(), recent)
+    assert decision.approved, "a 10-hour-old daily bar must still be tradeable"
+    assert not risk.halted
+
+
+def test_an_old_bar_warns_without_halting(db):
+    risk = RiskManager(db, RiskLimits(max_bar_age_days=4, warn_bar_age_days=2.0))
+    lagging = Bar(symbol="BTC", ts=utcnow() - timedelta(days=3), open=1, high=1, low=1, close=100)
+    decision = risk.check(order(qty=10), account(), lagging)
+    assert decision.approved
+    assert not risk.halted
+    kinds = [e["kind"] for e in db.recent_risk_events()]
+    assert "stale_bar_warning" in kinds
 
 
 def test_daily_loss_limit_halts_the_bot(db, bar):

@@ -32,9 +32,13 @@ class RiskLimits:
     max_position_pct_of_equity: float = 0.50
     # Don't let cap-shaving produce a dust order that costs more in fees than it risks.
     min_order_value: float = 500.0
-    # A signal built on a bar older than this is not tradeable: we have lost the
-    # feed and any decision is being made on a price the market has moved past.
-    max_bar_age_seconds: int = 7_200
+    # The strategy reads DAILY candles, so the newest bar is hours old by design
+    # and only becomes unusable once the feed itself stops publishing. Judge
+    # staleness in days against the expected bar frequency, not in hours.
+    max_bar_age_days: int = 4
+    # Warn (without halting) once a bar is this old, so a lagging feed is visible
+    # in the log instead of silently trading on yesterday's price.
+    warn_bar_age_days: float = 2.0
     # If an order's fate is unknown this long, stop rather than risk a double fill.
     order_confirmation_timeout_seconds: int = 30
     reconcile_interval_seconds: int = 300

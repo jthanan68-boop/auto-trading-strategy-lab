@@ -75,9 +75,15 @@ class RiskManager:
         if self.db.order_exists(request.client_order_id):
             return RiskDecision(False, "duplicate order id, already submitted")
 
-        if bar.age_seconds > self.limits.max_bar_age_seconds:
-            self.halt(HaltReason.STALE_PRICE, f"{request.symbol} bar is {bar.age_seconds:.0f}s old")
+        age_days = bar.age_seconds / 86_400
+        if age_days > self.limits.max_bar_age_days:
+            self.halt(HaltReason.STALE_PRICE, f"{request.symbol} bar is {age_days:.1f} days old")
             return RiskDecision(False, "stale price data", HaltReason.STALE_PRICE)
+
+        if age_days > self.limits.warn_bar_age_days:
+            self.db.log_risk_event(
+                "stale_bar_warning", f"{request.symbol} bar is {age_days:.1f} days old"
+            )
 
         day_pnl = self.db.day_pnl(account.equity)
         if day_pnl <= -abs(self.limits.max_daily_loss):
