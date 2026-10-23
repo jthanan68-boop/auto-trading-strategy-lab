@@ -9,6 +9,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+from datetime import timedelta
+
+from stubs import StubFeed, run_until_filled
 
 from stratbot.broker.paper import PaperBroker
 from stratbot.config import BotConfig, RiskLimits
@@ -178,17 +181,25 @@ def test_first_snapshot_marks_new_positions_to_market(tmp_path, monkeypatch):
     engine = engine_module.Engine(config, db, broker=broker)
 
     entry = 1_000_000.0
-    bar = Bar(symbol="BTC", ts=utcnow(), open=entry, high=entry, low=entry, close=entry)
+    base = utcnow()
+    history = pd.DataFrame(
+        {"open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0], "volume": [1.0]})
     # Slippage makes the fill worse than the mark, exactly as in the real run.
-    monkeypatch.setattr(engine_module, "current_bars", lambda symbols: {"BTC": bar})
-    monkeypatch.setattr(engine, "_history", lambda s: pd.DataFrame(
-        {"open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0], "volume": [1.0]}))
+    # Two bars, because the entry fills on the bar after the one that signalled.
+    timeline = [
+        {"BTC": Bar(symbol="BTC", ts=base, open=entry, high=entry, low=entry, close=entry)},
+        {"BTC": Bar(symbol="BTC", ts=base + timedelta(days=1),
+                    open=entry, high=entry, low=entry, close=entry)},
+    ]
+    engine.feed = StubFeed(timeline, lambda: history)
 
-    engine.cycle()
+    run_until_filled(engine)
 
     rows = db.equity_history()
     assert rows, "no equity snapshot recorded"
-    first = rows[0]
+    filled_at = [r for r in rows if abs(float(r["exposure"])) > 0]
+    assert filled_at, "no snapshot shows an open position"
+    first = filled_at[0]
     position = broker.positions.get("BTC")
     assert position is not None and position.is_open(), (
         f"test did not open a position; engine decisions were {engine.cycle()}"
@@ -245,7 +256,8 @@ def test_donchian_is_long_at_a_55_day_high():
     assert DonchianBreakout(55, 20).position(frame) == 1.0
 
 
-def test_donchian_needs_enough_history():
+def test_donchian_falls_back_to_the_previous_close_without_enough_history():
+    """Not a bug: a series too short for the channel trades off the previous close."""
     frame = pd.DataFrame({"open": [1.0] * 20, "high": [1.0] * 20,
                           "low": [1.0] * 20, "close": [1.0] * 20, "volume": 1.0})
-    assert DonchianBreakout(55, 20).position(frame) == 0.0
+    assert DonchianBreakout(55, 20).position(frame) == 1.0

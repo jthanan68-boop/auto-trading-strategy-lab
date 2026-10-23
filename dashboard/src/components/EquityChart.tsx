@@ -23,20 +23,21 @@ export function EquityChart({ points }: { points: EquityPoint[] }) {
 
     const instance = createChart(container.current, {
       layout: {
-        background: { type: ColorType.Solid, color: "#131722" },
-        textColor: "#8b93a7",
+        background: { type: ColorType.Solid, color: "#141a19" },
+        textColor: "#8c9c97",
+        fontFamily: "'IBM Plex Mono', ui-monospace, monospace",
         fontSize: 11,
       },
-      grid: { vertLines: { color: "#1c2130" }, horzLines: { color: "#1c2130" } },
-      rightPriceScale: { borderColor: "#232838" },
-      timeScale: { borderColor: "#232838", timeVisible: true, secondsVisible: false },
+      grid: { vertLines: { color: "#1e2826" }, horzLines: { color: "#1e2826" } },
+      rightPriceScale: { borderColor: "#263230" },
+      timeScale: { borderColor: "#263230", timeVisible: true, secondsVisible: false },
       autoSize: true,
     });
 
     series.current = instance.addSeries(AreaSeries, {
-      lineColor: "#4c8dff",
-      topColor: "rgba(76,141,255,0.28)",
-      bottomColor: "rgba(76,141,255,0.01)",
+      lineColor: "#d9a441",
+      topColor: "rgba(217,164,65,0.20)",
+      bottomColor: "rgba(217,164,65,0.01)",
       lineWidth: 2,
       priceFormat: { type: "price", precision: 0, minMove: 1 },
     });

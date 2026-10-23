@@ -6,7 +6,9 @@ require the shared control token so a browser tab cannot halt or resume the bot.
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,10 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import CONFIG, DB_PATH, TRADING_MODE
+from .config import CONFIG, DB_PATH, TRADING_MODE, BotConfig
 from .db import Database
 from .engine import Engine
+from .models import HaltReason
 from .reconciler import adopt_broker_state, reconcile
+from .broker.quotes import QuoteService
 
 CONTROL_TOKEN = os.environ.get("STRATBOT_CONTROL_TOKEN", "")
 
@@ -30,13 +34,74 @@ def require_control(x_control_token: str | None = Header(default=None)) -> None:
         raise HTTPException(403, "bad control token")
 
 
-def create_app(engine: Engine | None = None, db: Database | None = None) -> FastAPI:
+def create_app(engine: Engine | None = None, db: Database | None = None,
+               config: BotConfig | None = None, trade: bool = False,
+               poll_seconds: float | None = None,
+               quotes: QuoteService | None = None) -> FastAPI:
     db = db or Database(DB_PATH)
-    engine = engine or Engine(CONFIG, db)
+    engine = engine or Engine(config or CONFIG, db, quotes=quotes)
+
+    # One engine, one ledger. A separate CLI loop and a separate server would each
+    # hold their own in-memory book and overwrite each other's positions, so the
+    # polling loop lives inside this process and shares the engine.
+    lock = threading.Lock()
+    stop = threading.Event()
+    logger = logging.getLogger("stratbot")
+
+    def cycle_once() -> dict:
+        with lock:
+            result = engine.cycle()
+        return {
+            "cycle": result.cycle,
+            "halted": result.halted,
+            "halt_reason": result.halt_reason,
+            "equity": round(result.account.equity, 2),
+            "decisions": result.decisions,
+        }
+
+    def live_account():
+        """The account marked with live quotes, so the numbers on screen are current.
+
+        The recorded equity curve stays per cycle; this only reprices the open
+        book for whoever is looking at it now.
+        """
+        live = engine.live_quotes()
+        usable = {s: q.price for s, q in live.items() if q.usable}
+        if usable:
+            engine.broker.mark(usable)
+        return engine.broker.get_account()
+
+    def poll(stop_event: threading.Event) -> None:
+        interval = poll_seconds if poll_seconds is not None else engine.config.poll_seconds
+        while not stop_event.is_set():
+            try:
+                summary = cycle_once()
+                logger.info(
+                    "cycle %s %s equity=%.2f exposure=%.2f",
+                    summary["cycle"],
+                    "HALTED" if summary["halted"] else "ok",
+                    summary["equity"],
+                    engine.broker.get_account().exposure,
+                )
+            except Exception as exc:  # a dead loop is worse than a halted one
+                engine.risk.halt(HaltReason.BROKER_DOWN, f"cycle error: {exc}")
+                logger.error("cycle error: %s", exc)
+            stop_event.wait(interval)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        yield
+        worker = None
+        if trade:
+            worker = threading.Thread(target=poll, args=(stop,), name="stratbot-cycle", daemon=True)
+            worker.start()
+            logger.info("trading loop started, polling every %ss",
+                        poll_seconds if poll_seconds is not None else engine.config.poll_seconds)
+        try:
+            yield
+        finally:
+            stop.set()
+            if worker is not None:
+                worker.join(timeout=5)
 
     app = FastAPI(
         title="Paper trading engine",
@@ -55,10 +120,11 @@ def create_app(engine: Engine | None = None, db: Database | None = None) -> Fast
 
     @app.get("/api/status")
     def status():
-        account = engine.broker.get_account()
+        account = live_account()
         return {
             "mode": TRADING_MODE,
             "is_paper": engine.config.is_paper,
+            "realtime": engine.quotes is not None,
             "halted": engine.risk.halted,
             "halt_reason": engine.risk.halt_reason.value if engine.risk.halt_reason else None,
             "cycles": engine.cycle_count,
@@ -67,20 +133,29 @@ def create_app(engine: Engine | None = None, db: Database | None = None) -> Fast
             "equity": round(account.equity, 2),
             "cash": round(account.cash, 2),
             "exposure": round(account.exposure, 2),
+            "market_value": round(account.market_value, 2),
             "unrealised": round(account.unrealised, 2),
+            # Realised comes from flattened positions only. Opening a position
+            # spends cash but realises nothing, so cash-minus-starting-cash would
+            # report the whole notional as a loss.
+            "realised": round(db.closed_pnl(), 2),
+            "fees_paid": round(db.fees_paid(), 2),
+            "position_cost": round(db.open_position_cost(), 2),
             "day_pnl": round(db.day_pnl(account.equity), 2),
             "limits": {
                 "max_position_value": engine.config.limits.max_position_value,
                 "max_total_exposure": engine.config.limits.max_total_exposure,
                 "max_daily_loss": engine.config.limits.max_daily_loss,
                 "stop_loss_pct": engine.config.limits.stop_loss_pct,
+                "stop_loss_intraday": engine.config.stop_loss_intraday,
+                "stop_loss_use_live_quotes": engine.config.stop_loss_use_live_quotes,
             },
             "control_enabled": bool(CONTROL_TOKEN),
         }
 
     @app.get("/api/positions")
     def positions():
-        account = engine.broker.get_account()
+        account = live_account()
         return [
             {
                 "symbol": p.symbol,
@@ -95,6 +170,27 @@ def create_app(engine: Engine | None = None, db: Database | None = None) -> Fast
             if p.is_open()
         ]
 
+    @app.get("/api/quotes")
+    def quotes_endpoint():
+        """Live prices, with the source that produced them.
+
+        The source and the age are part of the answer: a Binance print is
+        live, a Yahoo intraday print for an NSE name is fifteen minutes late,
+        and the operator is told which one they are looking at.
+        """
+        return [
+            {
+                "symbol": q.symbol,
+                "price": round(q.price, 6),
+                "ts": q.ts.isoformat(),
+                "source": q.source,
+                "delayed": q.delayed,
+                "age_seconds": round(q.age_seconds, 1),
+                "usable": q.usable,
+            }
+            for q in engine.live_quotes().values()
+        ]
+
     @app.get("/api/equity")
     def equity():
         return db.equity_history()
@@ -106,6 +202,12 @@ def create_app(engine: Engine | None = None, db: Database | None = None) -> Fast
     @app.get("/api/orders")
     def orders(limit: int = 100):
         return db.recent_fills(limit)
+
+    @app.get("/api/pending-orders")
+    def pending_orders(limit: int = 100):
+        # Orders raised on a bar but not yet filled. Without this the dashboard
+        # cannot show why the bot looks idle while it is actually holding work.
+        return db.pending_orders()[:limit]
 
     @app.get("/api/trades")
     def trades():
@@ -125,14 +227,7 @@ def create_app(engine: Engine | None = None, db: Database | None = None) -> Fast
 
     @app.post("/api/cycle", dependencies=[Depends(require_control)])
     def cycle():
-        result = engine.cycle()
-        return {
-            "cycle": result.cycle,
-            "halted": result.halted,
-            "halt_reason": result.halt_reason,
-            "equity": round(result.account.equity, 2),
-            "decisions": result.decisions,
-        }
+        return cycle_once()
 
     @app.post("/api/adopt-broker-state", dependencies=[Depends(require_control)])
     def adopt():
@@ -198,4 +293,21 @@ def _mount_dashboard(app: FastAPI) -> None:
     app.state.dashboard_built = True
 
 
-app = create_app()
+_default_app = None
+
+
+def _default_quotes() -> QuoteService:
+    """Quotes for the default universe, so a standalone server is live too."""
+    from stratlab import data as price_data
+
+    return QuoteService(price_data.BY_SYMBOL[symbol] for symbol in CONFIG.symbols)
+
+
+def __getattr__(name: str):
+    # An app built at import time writes to the live ledger on every import, so it is built on demand instead.
+    global _default_app
+    if name == "app":
+        if _default_app is None:
+            _default_app = create_app(quotes=_default_quotes())
+        return _default_app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

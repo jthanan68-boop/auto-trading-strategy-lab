@@ -20,9 +20,9 @@ export function RiskLog({ events }: { events: RiskEvent[] }) {
 
 function tone(kind: string): string {
   if (kind.includes("halt") || kind.includes("loss") || kind.includes("mismatch") || kind.includes("down")) {
-    return "#ef5350";
+    return "#e2574c";
   }
-  if (kind.includes("stop_loss") || kind.includes("rejected") || kind.includes("cap")) return "#f0b90b";
-  if (kind.includes("resumed") || kind.includes("start")) return "#26a69a";
-  return "#8b93a7";
+  if (kind.includes("stop_loss") || kind.includes("rejected") || kind.includes("cap")) return "#d9a441";
+  if (kind.includes("resumed") || kind.includes("start")) return "#3fb98c";
+  return "#8c9c97";
 }

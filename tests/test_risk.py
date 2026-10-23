@@ -98,6 +98,19 @@ def test_a_capped_bot_can_still_sell(db, bar):
     assert decision.approved, "being at the cap must never block a sell"
 
 
+def test_a_loss_halt_still_lets_the_book_be_sold(db, bar):
+    """Daily-loss halting locks new direction, not the exit door."""
+    risk = RiskManager(db, RiskLimits(max_daily_loss=1_000))
+    db.reset_day(equity=100_000)
+    held = Position(symbol="BTC", qty=100, avg_price=100, last_price=100)
+    book = AccountState(cash=88_000, positions={"BTC": held})
+    sell = risk.check(order(side=Side.SELL, qty=100), book, bar)
+    buy = risk.check(order(), book, bar)
+    assert sell.approved, "a halted bot must still be able to exit a held position"
+    assert not buy.approved
+    assert buy.halt is HaltReason.DAILY_LOSS
+
+
 def test_exposure_cap_blocks_but_does_not_halt(db, bar):
     limits = RiskLimits(max_position_value=1_000_000, max_total_exposure=10_000)
     risk = RiskManager(db, limits)

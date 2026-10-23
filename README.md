@@ -207,6 +207,7 @@ Then `http://127.0.0.1:8000/docs` for the API, or:
 |---|---|
 | `GET /api/status` | equity, exposure, halt state, risk limits |
 | `GET /api/positions` | open positions and unrealised P/L |
+| `GET /api/quotes` | live prices, with the source and the age of each |
 | `GET /api/equity` | equity curve |
 | `GET /api/signals` | every decision, with the reason for it |
 | `GET /api/risk-events` | halts, stop losses, rejections |
@@ -217,6 +218,26 @@ Then `http://127.0.0.1:8000/docs` for the API, or:
 On a quiet day the engine may legitimately place no orders — Donchian only buys a
 55-day high, and on some days nothing qualifies. `tests/test_integration.py`
 drives synthetic bars to prove the order path works regardless.
+
+## Realtime quotes
+
+The engine decides on completed daily bars and fills at the next bar's open.
+That does not change. What is live is the *mark*: the price an open position is
+valued at, and the price the dashboard shows.
+
+| Asset class | Source | Latency |
+|---|---|---|
+| BTC, ETH | Binance spot ticker | live, no account and no key |
+| NSE equities | Yahoo one-minute chart | about 15 minutes behind |
+
+There is no key-free live NSE source, so a delayed equity price is the honest
+best available. Every quote carries the venue that produced it and its age, so
+a stale price is visible rather than mistaken for a current one.
+
+A quote too old to trust is refused and the daily bar takes over again. A
+provider that fails or is slow leaves the bot trading on the evidence it always
+had — the quote layer is an addition, never a dependency. `--no-realtime` turns
+it off entirely and marks positions from the daily close as before.
 
 ## Risk controls
 

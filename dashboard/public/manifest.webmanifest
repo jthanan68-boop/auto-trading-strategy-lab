@@ -1,13 +1,13 @@
 {
   "name": "StratBot Dashboard",
   "short_name": "StratBot",
-  "description": "Monitoring dashboard for the paper trading engine",
+  "description": "Operator view for a risk-capped paper trading engine",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#0b0e14",
-  "theme_color": "#0b0e14",
+  "background_color": "#0e1312",
+  "theme_color": "#0e1312",
   "icons": [
     {
       "src": "./icon.svg",

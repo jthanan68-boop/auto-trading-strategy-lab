@@ -18,6 +18,7 @@ data/cache/
 # Runtime ledgers and strategy lab output
 data/*.sqlite3
 data/*.sqlite3-*
+data/*.sqlite3.lock
 out/
 logs/
 

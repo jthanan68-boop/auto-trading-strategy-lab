@@ -16,9 +16,12 @@ from logging.handlers import RotatingFileHandler
 from dataclasses import replace
 from pathlib import Path
 
-from stratbot.config import CONFIG, DB_PATH
+from stratbot.broker.feed import MarketDataFeed
+from stratbot.broker.quotes import QuoteService
+from stratbot.config import CONFIG, DB_PATH, BotConfig
 from stratbot.db import Database
 from stratbot.engine import Engine
+from stratbot.single_instance import InstanceAlreadyRunning, InstanceLock
 
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 
@@ -45,6 +48,37 @@ def setup_logging(verbose: bool) -> logging.Logger:
     return logger
 
 
+def _parse_symbols(raw: str) -> tuple[str, ...]:
+    """Narrow the universe, refusing anything the strategy lab does not know.
+
+    A silently ignored typo would look like a strategy that stopped working, so
+    an unknown symbol is an error rather than a shrug.
+    """
+    from stratlab.data import BY_SYMBOL
+
+    names = tuple(part.strip().upper() for part in raw.split(",") if part.strip())
+    unknown = [name for name in names if name not in BY_SYMBOL]
+    if unknown:
+        raise SystemExit(
+            f"unknown symbol(s): {', '.join(unknown)}. "
+            f"Known: {', '.join(sorted(BY_SYMBOL))}"
+        )
+    if not names:
+        raise SystemExit("--symbols was given but resolved to an empty list")
+    return names
+
+
+def _quote_service(config: BotConfig) -> QuoteService:
+    """Live quotes for the traded symbols.
+
+    The engine marks open positions with these. A decision still reads a
+    completed daily bar and a fill still happens at the next bar's open.
+    """
+    from stratlab import data as price_data
+
+    return QuoteService(price_data.BY_SYMBOL[symbol] for symbol in config.symbols)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Paper trading engine (simulator only).")
     parser.add_argument("--db", default=str(DB_PATH), help="SQLite path")
@@ -58,12 +92,48 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--refresh", action="store_true",
+                        help="download fresh candles for every symbol at startup")
+    parser.add_argument("--refresh-interval", type=int, default=60,
+                        help="minutes between automatic cache refreshes (default 60)")
+    parser.add_argument("--refresh-only", action="store_true",
+                        help="refresh the data, print provenance, then exit without trading")
+    parser.add_argument("--capital", type=float, default=None,
+                        help="override starting paper cash (default: the configured value)")
+    parser.add_argument("--trade", action="store_true",
+                        help="with --serve, also run the trading loop in the same process")
+    parser.add_argument("--poll", type=int, default=None,
+                        help="seconds between cycles when trading in the server (default 300)")
+    parser.add_argument("--symbols", default=None,
+                        help="comma-separated subset of the universe, e.g. RELIANCE,INFY "
+                             "(default: all five)")
+    parser.add_argument("--no-realtime", action="store_true",
+                        help="mark positions from the daily bar close instead of live quotes")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     logger = setup_logging(args.verbose)
+
+    # Taken before anything opens the database or touches the cache, so a second
+    # instance is refused without having written a single record.
+    lock = InstanceLock(args.db)
+    try:
+        lock.acquire()
+    except InstanceAlreadyRunning as exc:
+        logger.error("%s", exc)
+        return 2
+
+    config = replace(
+        CONFIG,
+        strategy_name=args.strategy,
+        refresh_interval_minutes=args.refresh_interval,
+        **({"initial_cash": args.capital} if args.capital is not None else {}),
+        **({"symbols": _parse_symbols(args.symbols)} if args.symbols else {}),
+    )
+
+    quotes = None if args.no_realtime else _quote_service(config)
 
     if args.serve:
         if not os.environ.get("STRATBOT_CONTROL_TOKEN"):
@@ -75,15 +145,37 @@ def main() -> int:
 
         import uvicorn
 
+        logger.info("realtime quotes: %s", "off" if quotes is None else "on")
         db = Database(args.db)
-        uvicorn.run(create_app(db=db), host=args.host, port=args.port, log_level="info")
+        try:
+            uvicorn.run(
+                create_app(db=db, config=config, trade=args.trade, poll_seconds=args.poll,
+                           quotes=quotes),
+                host=args.host, port=args.port, log_level="info",
+            )
+        finally:
+            lock.release()
         return 0
 
-    config = replace(CONFIG, strategy_name=args.strategy)
     db = Database(Path(args.db))
-    engine = Engine(config, db)
+    feed = MarketDataFeed(config.symbols, refresh_interval_minutes=args.refresh_interval)
+    feed.logger = logger
+    engine = Engine(config, db, feed=feed, quotes=quotes)
+
+    logger.info("provider=yfinance.download source=cache/%s refresh_interval=%dm",
+                "data/cache", args.refresh_interval)
+    if args.refresh or args.refresh_only:
+        logger.info("refreshing market data at startup")
+        engine.refresh_data(logger=logger)
+
+    if args.refresh_only:
+        logger.info("refresh-only: no trading performed")
+        for symbol, prov in sorted(engine.feed.provenance.items()):
+            logger.info("provenance: %s", prov.log_line())
+        return 0
 
     logger.info("mode=paper strategy=%s symbols=%s", config.strategy_name, ",".join(config.symbols))
+    logger.info("realtime quotes: %s", "off" if quotes is None else "on")
     logger.info(
         "limits: max_position=%.0f max_exposure=%.0f max_daily_loss=%.0f stop_loss=%.1f%%",
         config.limits.max_position_value,
@@ -95,7 +187,12 @@ def main() -> int:
     logger.info("log: %s", LOG_DIR / "engine.log")
 
     cycles = None if args.forever else args.cycles
-    engine.run_forever(cycles=cycles, sleep_seconds=args.sleep, logger=logger)
+    try:
+        engine.run_forever(cycles=cycles, sleep_seconds=args.sleep, logger=logger)
+    finally:
+        # Release on a clean exit; a crash is covered by the kernel dropping the
+        # lock when the process dies, so there is no stale file to clear by hand.
+        lock.release()
 
     account = engine.broker.get_account()
     logger.info("equity=%.2f cash=%.2f exposure=%.2f", account.equity, account.cash, account.exposure)

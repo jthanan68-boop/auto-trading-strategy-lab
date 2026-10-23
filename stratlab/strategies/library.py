@@ -77,6 +77,9 @@ class DonchianBreakout:
 
     This is trend following done properly: it buys continuation, and it holds
     through noise instead of reacting to every wiggle.
+
+    A series shorter than the entry window has no channel to break, so the
+    previous close stands in for it.
     """
 
     def __init__(self, entry: int = 55, exit: int = 20, params: dict | None = None):
@@ -88,7 +91,15 @@ class DonchianBreakout:
 
     def position(self, history: pd.DataFrame) -> float:
         close = history["close"]
+        if len(close) < 2:
+            return 0.0
         if len(close) < self.entry + 1:
+            # Too short for the channel, so the previous close is the trigger.
+            last = close.iloc[-1]
+            if last >= close.iloc[-2]:
+                self._in_position = True
+                return 1.0
+            self._in_position = False
             return 0.0
         prior = close.iloc[:-1]
         entry_high = prior.iloc[-self.entry :].max()

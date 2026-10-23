@@ -37,7 +37,10 @@ CREATE TABLE IF NOT EXISTS orders (
     reference_price REAL NOT NULL DEFAULT 0,
     strategy        TEXT NOT NULL,
     status          TEXT NOT NULL,
-    reason          TEXT NOT NULL DEFAULT ''
+    reason          TEXT NOT NULL DEFAULT '',
+    signal_bar_ts     TEXT,
+    target_weight     REAL,
+    execution_bar_ts  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_ts ON orders(ts);
 
@@ -97,6 +100,20 @@ CREATE INDEX IF NOT EXISTS idx_risk_ts ON risk_events(ts);
 
 STATE_KEYS = ("halted", "halt_reason", "day_start_equity", "day_start")
 
+# The statuses that mean a request actually reached the broker. Queued (NEW),
+# CANCELLED and RATE_LIMITED rows have never been submitted anywhere; FILLED
+# rows were submitted and completed, UNKNOWN ones were submitted with an
+# unresolved fate, so both count toward rate caps.
+SUBMITTED_STATUSES = (OrderStatus.FILLED.value, OrderStatus.UNKNOWN.value)
+
+# Added after the first release so a signal bar and the bar it executed on can be
+# compared. Additive only: no existing column changes meaning.
+ORDER_COLUMN_MIGRATIONS = (
+    ("signal_bar_ts", "TEXT"),
+    ("target_weight", "REAL"),
+    ("execution_bar_ts", "TEXT"),
+)
+
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
@@ -110,8 +127,22 @@ class Database:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._unreadable_state: set[str] = set()
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn):
+        """Add columns a pre-existing database file is missing.
+
+        PRAGMA-driven so it is a clean no-op on a current file and safe to run on
+        every startup, which is what keeps it re-runnable.
+        """
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
+        for name, kind in ORDER_COLUMN_MIGRATIONS:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {kind}")
 
     @contextmanager
     def connect(self):
@@ -150,12 +181,14 @@ class Database:
         with self.connect() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO orders"
-                " (client_order_id,ts,symbol,side,qty,reference_price,strategy,status,reason)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
+                " (client_order_id,ts,symbol,side,qty,reference_price,strategy,status,reason,"
+                "  signal_bar_ts,target_weight)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     request.client_order_id, utcnow().isoformat(), request.symbol,
                     request.side.value, request.qty, request.reference_price,
                     request.strategy, status.value, reason,
+                    _iso(request.signal_bar_ts), request.target_weight,
                 ),
             )
 
@@ -166,6 +199,20 @@ class Database:
                 (status.value, reason, client_order_id),
             )
 
+    def mark_order_executed(self, client_order_id: str, execution_bar_ts: datetime, qty: float):
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE orders SET execution_bar_ts=?, qty=? WHERE client_order_id=?",
+                (execution_bar_ts.isoformat(), qty, client_order_id),
+            )
+
+    def order_status(self, client_order_id: str) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT status FROM orders WHERE client_order_id=?", (client_order_id,)
+            ).fetchone()
+        return row["status"] if row else None
+
     def open_orders(self) -> list[dict]:
         with self.connect() as conn:
             rows = conn.execute(
@@ -173,6 +220,23 @@ class Database:
                 (OrderStatus.NEW.value, OrderStatus.UNKNOWN.value),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def pending_orders(self) -> list[dict]:
+        """Orders signalled but not yet filled, oldest signal first."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM orders WHERE status=? ORDER BY ts ASC, client_order_id ASC",
+                (OrderStatus.NEW.value,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def cancel_pending_orders(self, reason: str = "cancelled before execution") -> int:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "UPDATE orders SET status=?, reason=? WHERE status=?",
+                (OrderStatus.CANCELLED.value, reason, OrderStatus.NEW.value),
+            )
+            return cursor.rowcount
 
     # ---- fills ---------------------------------------------------------
     def record_fill(self, fill: Fill):
@@ -189,9 +253,26 @@ class Database:
             rows = conn.execute("SELECT * FROM fills ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
 
-    def count_orders_since(self, since: datetime) -> int:
+    def count_orders_since(self, since: datetime, statuses: tuple[str, ...] | None = None) -> int:
+        """Orders recorded since `since`, optionally only the named statuses.
+
+        With no status filter this counts every row as before. The risk rate
+        gates pass SUBMITTED_STATUSES so the cap counts orders that actually
+        reached the broker: a row still queued as NEW has never been submitted
+        anywhere, and counting it made a pending book larger than the cap
+        strangle execution outright.
+        """
         with self.connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS n FROM orders WHERE ts>=?", (since.isoformat(),)).fetchone()
+            if statuses:
+                marks = ",".join("?" * len(statuses))
+                row = conn.execute(
+                    f"SELECT COUNT(*) AS n FROM orders WHERE ts>=? AND status IN ({marks})",
+                    (since.isoformat(), *statuses),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM orders WHERE ts>=?", (since.isoformat(),)
+                ).fetchone()
         return int(row["n"])
 
     # ---- positions -----------------------------------------------------
@@ -247,6 +328,30 @@ class Database:
             rows = conn.execute("SELECT * FROM closed_trades ORDER BY id DESC").fetchall()
         return [dict(r) for r in rows]
 
+    def closed_pnl(self) -> float:
+        """Profit and loss from positions that were actually flattened.
+
+        Deliberately not derivable from cash. Opening a position moves cash into
+        an asset, so cash-minus-starting-cash counts that notional as a loss,
+        which is wrong: the position is still held and its value sits in the
+        market value, not in the result.
+        """
+        with self.connect() as conn:
+            row = conn.execute("SELECT COALESCE(SUM(pnl), 0) total FROM closed_trades").fetchone()
+        return float(row["total"])
+
+    def fees_paid(self) -> float:
+        with self.connect() as conn:
+            row = conn.execute("SELECT COALESCE(SUM(fees), 0) total FROM fills").fetchone()
+        return float(row["total"])
+
+    def open_position_cost(self) -> float:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(qty * avg_price), 0) total FROM positions"
+            ).fetchone()
+        return float(row["total"])
+
     # ---- bot state -----------------------------------------------------
     def set_state(self, key: str, value):
         with self.connect() as conn:
@@ -259,7 +364,18 @@ class Database:
     def get_state(self, key: str, default=None):
         with self.connect() as conn:
             row = conn.execute("SELECT value FROM bot_state WHERE key=?", (key,)).fetchone()
-        return json.loads(row["value"]) if row else default
+        if not row:
+            return default
+        try:
+            return json.loads(row["value"])
+        except (json.JSONDecodeError, TypeError):
+            # A row written outside set_state can hold a bare value that is not
+            # JSON. Reading it must not raise: the state table is settings, and
+            # one bad value in it would otherwise stop the trading loop.
+            if key not in self._unreadable_state:
+                self._unreadable_state.add(key)
+                self.log_risk_event("state_unreadable", f"{key}={row['value']!r}")
+            return default
 
     def log_risk_event(self, kind: str, detail: str = ""):
         with self.connect() as conn:

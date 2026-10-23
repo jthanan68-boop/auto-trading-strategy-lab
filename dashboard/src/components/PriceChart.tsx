@@ -3,7 +3,6 @@ import {
   CandlestickSeries,
   ColorType,
   CrosshairMode,
-  LineSeries,
   createChart,
   type IChartApi,
   type UTCTimestamp,
@@ -27,13 +26,14 @@ export function PriceChart({ bars, symbol }: { bars: Bar[]; symbol: string }) {
 
     const instance = createChart(container.current, {
       layout: {
-        background: { type: ColorType.Solid, color: "#131722" },
-        textColor: "#8b93a7",
+        background: { type: ColorType.Solid, color: "#141a19" },
+        textColor: "#8c9c97",
+        fontFamily: "'IBM Plex Mono', ui-monospace, monospace",
         fontSize: 11,
       },
-      grid: { vertLines: { color: "#1c2130" }, horzLines: { color: "#1c2130" } },
-      rightPriceScale: { borderColor: "#232838" },
-      timeScale: { borderColor: "#232838", timeVisible: false },
+      grid: { vertLines: { color: "#1e2826" }, horzLines: { color: "#1e2826" } },
+      rightPriceScale: { borderColor: "#263230" },
+      timeScale: { borderColor: "#263230", timeVisible: false },
       crosshair: { mode: CrosshairMode.Normal },
       autoSize: true,
     });
@@ -56,20 +56,13 @@ export function PriceChart({ bars, symbol }: { bars: Bar[]; symbol: string }) {
 
     if (candles.length > 0) {
       instance.addSeries(CandlestickSeries, {
-        upColor: "#26a69a",
-        downColor: "#ef5350",
-        borderUpColor: "#26a69a",
-        borderDownColor: "#ef5350",
-        wickUpColor: "#26a69a",
-        wickDownColor: "#ef5350",
+        upColor: "#3fb98c",
+        downColor: "#e2574c",
+        borderUpColor: "#3fb98c",
+        borderDownColor: "#e2574c",
+        wickUpColor: "#3fb98c",
+        wickDownColor: "#e2574c",
       }).setData(candles);
-
-      instance.addSeries(LineSeries, {
-        color: "#4c8dff",
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      }).setData(candles.map((candle) => ({ time: candle.time, value: candle.close })));
 
       instance.timeScale().fitContent();
     }

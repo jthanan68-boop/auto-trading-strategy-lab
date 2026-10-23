@@ -12,6 +12,16 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def as_utc(ts: datetime) -> datetime:
+    """Normalise a bar timestamp for comparison.
+
+    Replayed bars carry naive timestamps from pandas; the ledger stores ISO
+    text. Bar.age_seconds already reads naive as UTC, so comparison uses the
+    same convention rather than raising on mixed awareness.
+    """
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+
 class Side(str, Enum):
     BUY = "BUY"
     SELL = "SELL"
@@ -24,6 +34,10 @@ class OrderStatus(str, Enum):
     REJECTED = "REJECTED"
     # Deliberately distinct from REJECTED: we do not know, and must not retry.
     UNKNOWN = "UNKNOWN"
+    # Distinct from REJECTED too: the order was valid, the risk volume gate is
+    # full for the window. Terminal like REJECTED - the engine does not retry
+    # it; the strategy re-signals on its next decision bar if it still wants it.
+    RATE_LIMITED = "RATE_LIMITED"
 
 
 class HaltReason(str, Enum):
@@ -66,6 +80,10 @@ class OrderRequest:
     signal_bar_ts: datetime
     reason: str = ""
     reference_price: float = 0.0
+    # Weight of equity the strategy asked for when it raised this intent. Held so
+    # the order can be re-sized at the execution price one bar later, instead of
+    # carrying a quantity that was computed against a stale close.
+    target_weight: float | None = None
 
     @property
     def client_order_id(self) -> str:
@@ -142,4 +160,10 @@ class AccountState:
 
     @property
     def realised_today(self) -> float:
+        """Not derivable from a snapshot.
+
+        Realised P/L belongs to the ledger: an open position's cost is
+        capital converted into an asset, never a loss. The authoritative
+        figure is Database.closed_pnl(), which counts only positions that
+        were actually flattened."""
         return 0.0

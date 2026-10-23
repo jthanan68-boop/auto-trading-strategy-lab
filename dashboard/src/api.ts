@@ -42,6 +42,7 @@ export interface Limits {
 export interface Status {
   mode: string;
   is_paper: boolean;
+  realtime: boolean;
   halted: boolean;
   halt_reason: string | null;
   cycles: number;
@@ -97,6 +98,21 @@ export interface Fill {
   fees: number;
 }
 
+export interface Order {
+  client_order_id: string;
+  ts: string;
+  symbol: string;
+  side: string;
+  qty: number;
+  reference_price: number;
+  strategy: string;
+  status: string;
+  reason: string;
+  signal_bar_ts: string | null;
+  target_weight: number | null;
+  execution_bar_ts: string | null;
+}
+
 export interface RiskEvent {
   id: number;
   ts: string;
@@ -112,12 +128,24 @@ export interface Bar {
   close: number;
 }
 
+export interface Quote {
+  symbol: string;
+  price: number;
+  ts: string;
+  source: string;
+  delayed: boolean;
+  age_seconds: number;
+  usable: boolean;
+}
+
 export const api = {
   status: () => get<Status>("/api/status"),
   positions: () => get<Position[]>("/api/positions"),
+  quotes: () => get<Quote[]>("/api/quotes"),
   equity: () => get<EquityPoint[]>("/api/equity"),
   signals: () => get<Signal[]>("/api/signals"),
   fills: () => get<Fill[]>("/api/orders"),
+  pendingOrders: () => get<Order[]>("/api/pending-orders"),
   riskEvents: () => get<RiskEvent[]>("/api/risk-events"),
   bars: (symbol: string, limit = 180) =>
     get<{ symbol: string; bars: Bar[] }>(`/api/bars/${encodeURIComponent(symbol)}?limit=${limit}`),
