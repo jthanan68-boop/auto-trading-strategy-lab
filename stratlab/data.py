@@ -15,7 +15,12 @@ from pathlib import Path
 import pandas as pd
 
 from . import binance
-from .calendar import behind_calendar
+from .calendar import (
+    INTRADAY_INTERVAL_MINUTES,
+    behind_calendar,
+    intraday_behind,
+    interval_minutes,
+)
 from .provenance import (
     MIN_HISTORY_ROWS,
     PROVIDER,
@@ -112,8 +117,22 @@ BY_SYMBOL = {i.symbol: i for i in UNIVERSE}
 BROAD_SYMBOLS = [i.symbol for i in NIFTY_BREADTH]
 
 
-def _cache_path(instrument: Instrument) -> Path:
-    return CACHE_DIR / f"{instrument.symbol}.csv"
+def _cache_path(instrument: Instrument, interval: str = "1d") -> Path:
+    # Interval 1d keeps the historic file name, so every existing daily cache,
+    # sidecar and downstream test keeps working untouched.
+    if interval == "1d":
+        return CACHE_DIR / f"{instrument.symbol}.csv"
+    return CACHE_DIR / f"{instrument.symbol}.{interval}.csv"
+
+
+def _clean_index(raw_index) -> pd.DatetimeIndex:
+    idx = pd.to_datetime(raw_index)
+    # Intraday responses carry timezone-aware stamps (exchange-local for NSE,
+    # UTC for crypto); caches must be naive UTC to compare with bar feeds and
+    # sessions. Daily responses are already naive dates and pass through as is.
+    if idx.tz is not None:
+        idx = idx.tz_convert("UTC").tz_localize(None)
+    return idx
 
 
 def _normalise(raw: pd.DataFrame, instrument: Instrument) -> pd.DataFrame:
@@ -122,14 +141,20 @@ def _normalise(raw: pd.DataFrame, instrument: Instrument) -> pd.DataFrame:
     missing = [c for c in REQUIRED_COLUMNS if c not in frame.columns]
     if missing:
         raise ValueError(f"{instrument.symbol}: missing columns {missing}")
-    frame = frame[REQUIRED_COLUMNS]
-    frame.index = pd.to_datetime(frame.index).tz_localize(None)
+    # OHLC is the required core, but volume is NOT dropped when the venue
+    # serves it: VwapDip's real VWAP needs it, and an OHLC-only frame turns
+    # that preset into a rule that can never trigger. Plain column order is
+    # stable (OHLC first) so older cache readers and tests keep their shape.
+    extras = [c for c in frame.columns if c not in REQUIRED_COLUMNS]
+    frame = frame[REQUIRED_COLUMNS + extras]
+    frame.index = _clean_index(frame.index)
     frame.index.name = "date"
     frame = frame[~frame.index.duplicated(keep="last")].sort_index()
     return frame.astype(float).dropna(how="all")
 
 
-def _fetch(instrument: Instrument, start: str, end: str, retries: int = 3) -> pd.DataFrame:
+def _fetch(instrument: Instrument, start: str, end: str, retries: int = 3,
+           interval: str = "1d") -> pd.DataFrame:
     import yfinance as yf
 
     last_error: Exception | None = None
@@ -139,7 +164,7 @@ def _fetch(instrument: Instrument, start: str, end: str, retries: int = 3) -> pd
                 instrument.yfinance_symbol,
                 start=start,
                 end=end,
-                interval="1d",
+                interval=interval,
                 auto_adjust=True,
                 progress=False,
                 threads=False,
@@ -153,11 +178,11 @@ def _fetch(instrument: Instrument, start: str, end: str, retries: int = 3) -> pd
             last_error = exc
             if attempt < retries - 1:
                 time.sleep(2 * (attempt + 1))
-    return _fallback(instrument, start, end, last_error)
+    return _fallback(instrument, start, end, last_error, interval=interval)
 
 
 def _fallback(instrument: Instrument, start: str, end: str,
-              cause: Exception) -> pd.DataFrame:
+              cause: Exception, interval: str = "1d") -> pd.DataFrame:
     """Second venue, for crypto only.
 
     Crypto is the one asset class with a key-free alternative to Yahoo, so an
@@ -170,7 +195,12 @@ def _fallback(instrument: Instrument, start: str, end: str,
         ) from cause
 
     try:
-        frame = _normalise(binance.daily_klines(instrument.symbol, start, end), instrument)
+        if interval == "1d":
+            frame = _normalise(binance.daily_klines(instrument.symbol, start, end), instrument)
+        else:
+            frame = _normalise(
+                binance.klines(instrument.symbol, interval, start, end), instrument
+            )
     except Exception as fallback_exc:
         raise RuntimeError(
             f"{instrument.symbol}: yahoo failed ({cause}); "
@@ -189,19 +219,34 @@ def load(
     start: str = "2018-01-01",
     end: str | None = None,
     refresh: bool = False,
+    interval: str = "1d",
 ) -> pd.DataFrame:
-    """Return cached daily OHLC, fetching from Yahoo on first use.
+    """Return cached OHLC, fetching from Yahoo on first use.
 
     Kept for the backtest lab, where a long-lived cache is the intent. The
     trading engine uses load_with_provenance instead, which reports what
     actually happened rather than returning a bare frame.
     """
-    return load_with_provenance(instrument, start=start, end=end, refresh=refresh)[0]
+    return load_with_provenance(instrument, start=start, end=end, refresh=refresh,
+                                interval=interval)[0]
 
 
 def _read_cache(path: Path, start: str) -> pd.DataFrame:
     cached = pd.read_csv(path, index_col="date", parse_dates=["date"])
     return cached[cached.index >= pd.Timestamp(start)]
+
+
+# Yahoo keeps only ~60 days of 5m/15m/30m intraday history; asking farther back
+# than the provider can serve would turn every refresh into a wasted error.
+INTRADAY_MAX_HISTORY_DAYS = 59
+
+
+def _clamp_intraday_start(start: str, interval: str, end: pd.Timestamp) -> str:
+    if interval == "1d":
+        return start
+    earliest = end.normalize() - pd.Timedelta(days=INTRADAY_MAX_HISTORY_DAYS)
+    requested = pd.Timestamp(start)
+    return max(requested, earliest).strftime("%Y-%m-%d")
 
 
 def load_with_provenance(
@@ -212,20 +257,26 @@ def load_with_provenance(
     max_cache_age_minutes: int | None = None,
     today: date | None = None,
     calendar_min_gap_minutes: int = 5,
+    interval: str = "1d",
 ) -> tuple[pd.DataFrame, Provenance]:
-    """Load daily OHLC and report exactly where it came from.
+    """Load OHLC at the given bar interval and report exactly where it came from.
 
     A download happens when asked, when the cache is missing, when the cache file
-    has aged past `max_cache_age_minutes`, or when the newest bar is behind the
-    trading calendar. The last case is what keeps a flat refresh interval from
-    leaving the dashboard showing yesterday while the exchange shows today.
+    has aged past `max_cache_age_minutes`, or - daily bars only, because the
+    intraday equivalents live in the session calendar - when the newest bar is
+    behind the trading calendar. The last case is what keeps a flat refresh
+    interval from leaving the dashboard showing yesterday while the exchange
+    shows today.
 
     A failed download never destroys a working cache: the existing file is kept
     and the returned provenance is marked stale, leaving the caller to decide.
     """
+    if interval not in INTRADAY_INTERVAL_MINUTES:
+        raise ValueError(f"unsupported interval: {interval}")
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _cache_path(instrument)
+    path = _cache_path(instrument, interval)
     end = end or (pd.Timestamp.today().normalize() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    start = _clamp_intraday_start(start, interval, pd.Timestamp(end))
     now = datetime.now(timezone.utc)
     today = today or now.date()
 
@@ -252,11 +303,18 @@ def load_with_provenance(
     elif have_usable_cache:
         if max_cache_age_minutes is not None and file_age_minutes >= max_cache_age_minutes:
             trigger = RefreshTrigger.INTERVAL
-        elif behind_calendar(cached.index[-1].date(), today, instrument.asset_class):
+        elif interval == "1d" and behind_calendar(
+                cached.index[-1].date(), today, instrument.asset_class):
             # A session the calendar says should exist has not been published yet.
             # The gap floor stops a long silence from turning into a request per cycle.
             if file_age_minutes >= calendar_min_gap_minutes:
                 trigger = RefreshTrigger.BEHIND_CALENDAR
+        elif interval != "1d":
+            last_ts = cached.index[-1].to_pydatetime()
+            now_naive = now.replace(tzinfo=None)
+            if intraday_behind(last_ts, now_naive, instrument.asset_class, interval):
+                if file_age_minutes >= calendar_min_gap_minutes:
+                    trigger = RefreshTrigger.BEHIND_CALENDAR
 
     if trigger is RefreshTrigger.NONE:
         if not have_usable_cache:
@@ -265,16 +323,22 @@ def load_with_provenance(
                 build_provenance(instrument.symbol, path, None,
                                  RefreshOutcome.REFRESH_FAILED_NO_CACHE,
                                  instrument.asset_class, None,
-                                 "cache missing or too short and refresh not requested"),
+                                 "cache missing or too short and refresh not requested",
+                                 interval=interval),
             )
         return cached, build_provenance(
             instrument.symbol, path, cached, RefreshOutcome.CACHE_HIT,
             instrument.asset_class, None, today=today, trigger=trigger.value,
-            provider=cached_provider,
+            provider=cached_provider, interval=interval,
         )
 
     try:
-        fetched = _fetch(instrument, start, end)
+        # Only the intraday path passes the keyword: daily-bar stubs keep the
+        # three-argument signature they have always had.
+        if interval == "1d":
+            fetched = _fetch(instrument, start, end)
+        else:
+            fetched = _fetch(instrument, start, end, interval=interval)
         # Captured before validate_frame, which may copy and drop frame attrs.
         source = fetched.attrs.get("provider", PROVIDER)
         validated = validate_frame(fetched, REQUIRED_COLUMNS, MIN_HISTORY_ROWS)
@@ -284,6 +348,7 @@ def load_with_provenance(
         return (cached if have_usable_cache else pd.DataFrame()), build_provenance(
             instrument.symbol, path, cached, outcome, instrument.asset_class, now,
             f"rejected: {exc}", today, trigger.value, provider=cached_provider,
+            interval=interval,
         )
     except Exception as exc:
         outcome = (RefreshOutcome.REFRESH_FAILED_STALE_CACHE if have_usable_cache
@@ -291,6 +356,7 @@ def load_with_provenance(
         return (cached if have_usable_cache else pd.DataFrame()), build_provenance(
             instrument.symbol, path, cached, outcome, instrument.asset_class, now,
             f"download failed: {exc}", today, trigger.value, provider=cached_provider,
+            interval=interval,
         )
 
     combined = validated
@@ -303,7 +369,7 @@ def load_with_provenance(
             return cached, build_provenance(
                 instrument.symbol, path, cached, RefreshOutcome.REJECTED_INVALID,
                 instrument.asset_class, now, f"rejected merge: {exc}", today, trigger.value,
-                provider=cached_provider,
+                provider=cached_provider, interval=interval,
             )
 
     # Inside the same guard as the download: a write that cannot complete must
@@ -317,6 +383,7 @@ def load_with_provenance(
         return (cached if have_usable_cache else pd.DataFrame()), build_provenance(
             instrument.symbol, path, cached, outcome, instrument.asset_class, now,
             f"cache write failed: {exc}", today, trigger.value, provider=cached_provider,
+            interval=interval,
         )
 
     result = combined[combined.index >= pd.Timestamp(start)]
@@ -339,7 +406,7 @@ def load_with_provenance(
     return result, build_provenance(
         instrument.symbol, path, result, RefreshOutcome.REFRESHED,
         instrument.asset_class, now, today=today, trigger=trigger.value,
-        provider=source,
+        provider=source, interval=interval,
     )
 
 
@@ -348,10 +415,12 @@ def refresh_all(
     start: str = "2018-01-01",
     end: str | None = None,
     today: date | None = None,
+    interval: str = "1d",
 ) -> dict[str, Provenance]:
     """Refresh every instrument once and report each outcome independently."""
     return {
-        i.symbol: load_with_provenance(i, start=start, end=end, refresh=True, today=today)[1]
+        i.symbol: load_with_provenance(i, start=start, end=end, refresh=True, today=today,
+                                       interval=interval)[1]
         for i in instruments
     }
 

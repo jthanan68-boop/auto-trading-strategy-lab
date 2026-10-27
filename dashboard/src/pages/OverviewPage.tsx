@@ -1,4 +1,4 @@
-import { api } from "../api";
+import { api, controlEnabled } from "../api";
 import { EquityChart } from "../components/EquityChart";
 import { PendingOrders } from "../components/PendingOrders";
 import { SessionBar } from "../components/SessionBar";
@@ -11,6 +11,7 @@ export function OverviewPage({ bot }: { bot: Bot }) {
   const cap = status?.limits.max_total_exposure ?? 0;
   const used = status && cap > 0 ? Math.min(100, (status.exposure / cap) * 100) : 0;
   const activeBars = bars[symbol] ?? [];
+  const controlsEnabled = controlEnabled();
 
   return (
     <>
@@ -92,14 +93,14 @@ export function OverviewPage({ bot }: { bot: Bot }) {
         <div className="controls-actions">
           <button
             className="btn"
-            disabled={bot.busy || halted || !status?.control_enabled}
+            disabled={bot.busy || halted || !status?.control_enabled || !controlsEnabled}
             onClick={() => bot.run(api.runCycle)}
           >
             Run one cycle
           </button>
           <button
             className="btn"
-            disabled={bot.busy || !halted || !status?.control_enabled}
+            disabled={bot.busy || !halted || !status?.control_enabled || !controlsEnabled}
             onClick={() => bot.run(api.resume)}
           >
             Resume trading

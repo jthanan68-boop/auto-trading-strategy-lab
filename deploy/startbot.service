@@ -1,0 +1,20 @@
+# systemd unit for StratBot on the Oracle free VM (Ubuntu).
+# Installed to /etc/systemd/system/startbot.service by deploy/oracle_setup.sh.
+# Restart=always is the "run forever" part: crashes and reboots both recover.
+
+[Unit]
+Description=StratBot paper trading engine (API + trading loop)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/startbot
+Environment=STRATBOT_CONTROL_TOKEN=change-this-token
+ExecStart=/opt/startbot/.venv/bin/python run_bot.py --serve --trade --poll 900 --db data/paper_run.sqlite3 --host 0.0.0.0 --port 8000 --symbols RELIANCE,TCS,INFY,HDFCBANK,ITC,SBIN,BTC,ETH,ICICIBANK,HINDUNILVR,BHARTIARTL,BAJFINANCE,KOTAKBANK,LT,AXISBANK,HCLTECH,ASIANPAINT,MARUTI,SUNPHARMA,TITAN,ULTRACEMCO,NTPC,POWERGRID,TATASTEEL,ADANIENT,ADANIPORTS,JSWSTEEL,TECHM,INDUSINDBK,HINDALCO,BAJAJFINSV,SBILIFE,DRREDDY,CIPLA,EICHERMOT,APOLLOHOSP,GRASIM,BRITANNIA,DIVISLAB,HEROMOTOCO,TATACONSUM
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -67,14 +67,34 @@ class RiskManager:
         self.db.log_risk_event("resumed", "halt cleared by operator")
 
     # ---- pre-trade checks ----------------------------------------------
-    def check_bar_freshness(self, bar: Bar) -> RiskDecision:
+    def check_bar_freshness(self, bar: Bar,
+                            session_live: bool | None = None) -> RiskDecision:
         """Is this bar recent enough to act on at all?
 
         Separate from check() because staleness is a property of the data, not of
         an order. An order waiting for its execution bar sits behind a stale
         signal bar forever, so the gate has to fire on the cycle that sees the
         stale bar, not only when an order happens to be submittable.
+
+        Intraday limits judge the age in minutes and enforce only while
+        `session_live` says this symbol's asset class has published a bar
+        today: on an exchange holiday or a weekend the whole class prints
+        nothing, and yesterday's bars are then correct rather than stale. When
+        the class is quiet the day-based checks below stay in charge.
         """
+        max_minutes = self.limits.max_bar_age_minutes
+        if max_minutes is not None and session_live:
+            age_minutes = bar.age_seconds / 60
+            if age_minutes > max_minutes:
+                self.halt(HaltReason.STALE_PRICE,
+                          f"{bar.symbol} bar is {age_minutes:.0f} minutes old")
+                return RiskDecision(False, "stale price data", HaltReason.STALE_PRICE)
+            warn_minutes = self.limits.warn_bar_age_minutes
+            if warn_minutes is not None and age_minutes > warn_minutes:
+                self.db.log_risk_event(
+                    "stale_bar_warning", f"{bar.symbol} bar is {age_minutes:.0f} minutes old"
+                )
+            return RiskDecision(True)
         age_days = bar.age_seconds / 86_400
         if age_days > self.limits.max_bar_age_days:
             self.halt(HaltReason.STALE_PRICE, f"{bar.symbol} bar is {age_days:.1f} days old")

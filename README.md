@@ -4,6 +4,13 @@ Phase 0 (strategy lab), Phase 1 (paper-trading engine) and Phase 2 (dashboard)
 of a plan to build a monitored, risk-capped automated trading system for Indian
 equities and crypto.
 
+Two trading styles live in the same engine and never mix state: **daily**
+(the original multi-week Donchian hold) and **intraday** (buy and exit within
+the same session). The default is currently intraday, but that default is
+**provisional** — it was pinned in advance of the empirical comparison that
+`run_intraday_lab.py` exists to produce, and it only stands if that comparison
+backs it.
+
 **This repository places no orders and holds no broker credentials.** Phase 1 is
 a simulator. There is no live broker adapter, no credential reader, and a test
 (`test_no_live_credentials_are_readable_anywhere`) asserts those strings appear
@@ -123,6 +130,87 @@ the fix rather than more strategy variants. Downloads are cached incrementally i
 Output lands in `out/`: `report.md`, `results.csv`, `equity_curves.png`.
 Price data is cached to `data/cache/` on first run and costs nothing.
 
+## Intraday mode (the current default, provisional)
+
+The engine can also trade *inside* one session: buy after it is open, square
+off before it closes, hold nothing overnight. Naive-UTC is the working timezone
+and `stratlab/calendar.py` owns the session rules:
+
+| Asset class | Session (UTC) | Bars |
+|---|---|---|
+| NSE equity | 03:45–10:00 | Yahoo 5m, publisher freshness varies; near-live on 26 Oct 2026 |
+| Crypto | full day, every day | Yahoo/Binance 5m |
+
+### The three presets
+
+| Preset | Rule | Instance name |
+|---|---|---|
+| ORB | buy the break above the first 15 minutes' range, exit under its low | `orb-15min` |
+| VWAP dip | buy ≤0.1% below the session VWAP, exit back at the line | `vwap-dip-0.1%` |
+| Fast SMA | 24/72-bar cross, the "graph up, buy" rule at intraday speed | `sma-intraday-24/72` |
+
+`buy-and-hold` runs alongside as the baseline, exempt from the evidence gate.
+
+### What changes versus daily mode — and what does not
+
+Only the stop and the freshness gate move. Every exposure and order cap is
+carried through at the same configured value:
+
+| Control | Daily | Intraday |
+|---|---|---|
+| Stop loss | 8% | **1%** |
+| Stale bar | day-based calendar gate | warn 30 min, halt 120 min — but only while the asset class printed a bar today, so a holiday never false-halts |
+| Position value, total exposure, daily loss, % of equity | unchanged | unchanged |
+| Order caps 20/hour, 100/day | unchanged | unchanged |
+| Round-trip cost (equity) | 0.322% (delivery STT both sides) | **0.1353%** (intraday STT sell-side only) |
+
+### Session-end guarantees
+
+- **Square-off** opens a fixed window (3 bars, ~15 min at 5m) before the close:
+  open positions queue a `square-off` exit that fills at the next bar's open,
+  inside the session. A window order bypasses order caps and a halt the way a
+  stop loss does.
+- **No new entries** in that window (reducing is always allowed).
+- **Restart recovery**: a crash between queue and fill — or any cycle that lands
+  outside the session with the book open — zeroes the position immediately at the
+  newest known price, through the same accounting path as any other fill, so the
+  ledger books the round trip. An empty cache, a stalled feed or a killed process
+  can trap data, never the book.
+- The daily-loss baseline still resets at UTC midnight.
+
+### The honest caveats
+
+NSE intraday bars arrive ~15 minutes late, so equity prices are a simulation
+approximation, accepted deliberately. Signal on a completed bar fills at the
+next bar's open, unchanged. Fresh intraday history is only ~59 days deep at
+Yahoo, so any intraday comparison is a short-window result by construction.
+
+### Comparing presets offline
+
+```bash
+.\.venv\Scripts\python run_intraday_lab.py            # 5 symbols, 5m, ~40 days
+.\.venv\Scripts\python run_intraday_lab.py --interval 15m
+```
+
+Splits chronologically (~60/40 dev/test), runs each preset per symbol with the
+per-asset-class intraday cost model, and ranks by test-split return. Anything
+under 20 round trips in a split is marked **insufficient evidence** rather than
+being treated as a result. The report ranks; it does not pick a winner.
+
+### Comparing live paper runs
+
+Run the engine once per strategy into separate databases, then:
+
+```bash
+.\.venv\Scripts\python run_bot.py --db data/run_orb.sqlite3
+.\.venv\Scripts\python run_bot.py --db data/run_vwap.sqlite3 ... --strategy vwap-dip
+.\.venv\Scripts\python run_compare.py data/run_orb.sqlite3 data/run_vwap.sqlite3
+```
+
+`run_compare.py` reads each ledger read-only and reports net return, drawdown
+(calendar-day and worst intraday tick), trade count, win rate, fees and
+resampled Sharpe/Sortino side by side. It also ranks rather than verdicts.
+
 ## The dashboard (Phase 2)
 
 A React + TypeScript PWA with candlestick charts, equity curve, positions,
@@ -192,8 +280,11 @@ PWA gives most of the benefit for none of that.
 ## Running the paper engine (Phase 1)
 
 ```bash
-# two cycles against the live free feed
+# two cycles against the live free feed (style default is intraday)
 .\.venv\Scripts\python run_bot.py --cycles 2 --sleep 5
+
+# the historical daily profile: Donchian 55/20, 5-min poll, 60-min refresh
+.\.venv\Scripts\python run_bot.py --cycles 2 --style daily
 
 # start the API
 .\.venv\Scripts\python -m pip install fastapi "uvicorn[standard]"
@@ -221,14 +312,15 @@ drives synthetic bars to prove the order path works regardless.
 
 ## Realtime quotes
 
-The engine decides on completed daily bars and fills at the next bar's open.
-That does not change. What is live is the *mark*: the price an open position is
-valued at, and the price the dashboard shows.
+The completed-bar rule holds in both styles: a signal decided on a completed
+bar fills at the next bar's open, whether that bar is a day or 5 minutes. What
+is live is the *mark*: the price an open position is valued at, and the price
+the dashboard shows.
 
 | Asset class | Source | Latency |
 |---|---|---|
 | BTC, ETH | Binance spot ticker | live, no account and no key |
-| NSE equities | Yahoo one-minute chart | about 15 minutes behind |
+| NSE equities | Yahoo one-minute chart | measured 6–16 s behind on 26 Oct 2026; aged prints are refused and stops fall back to the bars |
 
 There is no key-free live NSE source, so a delayed equity price is the honest
 best available. Every quote carries the venue that produced it and its age, so
@@ -250,11 +342,12 @@ through it, and cannot raise a limit.
 | Max position value | Order shrunk to fit, or refused and halted |
 | Max total exposure | Refused and halted |
 | Max daily loss | New trading halts for the day |
-| Stop loss | Forced exit at 8%, bypassing position caps on purpose |
+| Stop loss | Forced exit at 8% daily / 1% intraday, bypassing position caps on purpose |
 | Duplicate orders | Deterministic `client_order_id`; a repeat returns the original outcome, never a second fill |
 | Reconciliation | Ledger vs broker compared every cycle; a mismatch halts rather than self-heals |
-| Stale prices | Bar older than 2h halts the bot |
-| Order rate limits | 20/hour, 100/day |
+| Stale prices | Intraday: barring a holiday, a bar 2h old halts (30 min warns). Daily: day-based calendar gate |
+| Square-off window | Intraday: entries refused, open book queued for exit ~15 min before close. Bypasses order caps |
+| Order rate limits | 20/hour, 100/day (exits in the square-off window and stop losses bypass these on purpose) |
 | Unknown order status | Halts the bot — an unresolved order is never retried blindly |
 | Emergency stop | Halts, cancels, flattens, works with the API closed |
 
@@ -270,7 +363,8 @@ STT 0.1% each side, exchange transaction ~0.003%, SEBI ₹10/crore, IPFT
 charges. Binance spot: 0.1% per side.
 
 Modelled round trip: **0.322%** for India delivery (0.222% statutory + 0.10%
-slippage), 0.30% for Binance spot.
+slippage), **0.1353%** for India intraday (0.0353% statutory, STT sell-side
+only, + 0.10% slippage), 0.30% for Binance spot (same in both styles).
 
 **Verify every line against your own contract note before trusting any number
 here.** The defaults are a starting point, not a substitute for the real thing.
@@ -296,21 +390,23 @@ here by tests:
 stratlab/            Phase 0: research
   costs.py           Indian and crypto transaction cost models
   indicators.py      causal SMA / Wilder RSI / ATR
-  data.py            Yahoo Finance loading with a CSV cache
+  calendar.py        intraday sessions, bar grids, staleness primitives
+  data.py            Yahoo Finance loading with a per-interval CSV cache
   backtest.py        event loop, next-bar fills, metrics
   portfolio.py       multi-instrument backtester with rebalancing
   report.py          markdown, CSV and chart output
   strategies/
     library.py       buy-and-hold, SMA crossover, RSI, Donchian, buy-the-dip
+    intraday.py      ORB, VWAP dip, fast SMA - the intraday presets
     cross_sectional.py  momentum and low-volatility ranking rules
 
 stratbot/            Phase 1: paper trading engine
-  config.py          risk limits and universe
+  config.py          risk limits, trading styles, universe
   models.py          Bar, OrderRequest, Fill, Position, AccountState
   db.py              SQLite ledger: signals, orders, fills, equity, events
-  risk.py            every hard cap, kill switch
+  risk.py            every hard cap, kill switch, bar-freshness gate
   reconciler.py      ledger vs broker truth
-  engine.py          the loop
+  engine.py          the loop: flatten -> square-off -> stops -> signals
   analysis.py        Phase 3: regimes, run summary, not-yet-conclusive gate
   live_gate.py       Phase 4: three-factor unlock that fails closed
   api.py             FastAPI surface, also serves the dashboard
@@ -325,31 +421,38 @@ dashboard/           Phase 2: PWA
   src/components/    equity chart, candlestick chart, tables, risk log
   capacitor.config.ts  conversion-ready APK config
 
-run_lab.py           single-instrument backtest lab
+run_lab.py           daily backtest lab
 run_xs.py            cross-sectional portfolio backtest
 diagnose.py          why the strategies lost, decomposed
+run_intraday_lab.py  intraday preset comparison (evidence-gated ranking)
+run_compare.py       side-by-side ledger comparison of paper runs
 run_bot.py           paper engine and dashboard server
 analyse_run.py       Phase 3 analysis
 scripts/
   install_task.ps1   Windows scheduled task for continuous running
-tests/               125 tests
+tests/               full regression suite (run `.\.venv\Scripts\python -m pytest -q`)
 ```
 
 ## Scope
 
 - Symbols: NIFTY 50, RELIANCE, TCS, INFY, HDFCBANK, ITC, SBIN, BTC, ETH
 - Long-only, all-in or flat, one instrument at a time
-- Daily bars, next-open execution
-- Phase 1 currently trades BTC, ETH, RELIANCE, TCS, INFY with Donchian 55/20
+- Bars: daily or intraday 5m/… depending on style; next-open execution in both
+- Paper only: `run_bot.py` boots the intraday profile (ORB 15min, 5m bars,
+  BTC/ETH/RELIANCE/TCS/INFY) by default; `--style daily` restores Donchian
+  55/20 on daily bars. See [Intraday mode](#intraday-mode-the-current-default-provisional).
 
 ## Next steps
 
-1. **Run the paper engine for weeks** (Phase 3) and check `analyse_run.py`
+1. **Let the comparison decide the default.** `run_intraday_lab.py` ranks the
+   three presets with an evidence gate; the intraday default is provisional
+   until that ranking exists and says where the edge is.
+2. **Run the paper engine for weeks** (Phase 3) and check `analyse_run.py`
    weekly. This is the real test; the backtest was inconclusive. The tooling
    and the dashboard are ready to watch it happen.
-2. **Widen the universe and lengthen the window** before tuning any parameter.
+3. **Widen the universe and lengthen the window** before tuning any parameter.
    Parameter tuning on 4 trades is guaranteed overfitting.
-3. **Phase 4 stays gated** until the run beats buy-and-hold on live paper.
+4. **Phase 4 stays gated** until the run beats buy-and-hold on live paper.
 
 ## Phase 4 readiness: built, live trading: not built
 

@@ -68,7 +68,8 @@ class TestFallback:
 
         frame = price_data._fetch(BTC, "2024-01-01", "2024-03-01", retries=1)
 
-        assert list(frame.columns) == ["open", "high", "low", "close"]
+        assert list(frame.columns)[:4] == ["open", "high", "low", "close"]
+        assert frame["volume"].iloc[0] == 10.0   # venue volume rides through
         assert frame.attrs["provider"] == binance.BINANCE_PROVIDER
         assert len(frame) == 60
 

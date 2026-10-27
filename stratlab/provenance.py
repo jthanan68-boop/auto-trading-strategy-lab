@@ -19,7 +19,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from .calendar import expected_last_bar, is_stale
+from .calendar import (
+    expected_last_bar,
+    expected_last_intraday_bar,
+    intraday_stale,
+    is_stale,
+)
 
 PROVIDER = "yfinance.download"
 MIN_HISTORY_ROWS = 31
@@ -206,9 +211,12 @@ def build_provenance(
     today: date | None = None,
     trigger: str = RefreshTrigger.NONE.value,
     provider: str = PROVIDER,
+    interval: str = "1d",
 ) -> Provenance:
     today = today or datetime.now(timezone.utc).date()
     expected = expected_last_bar(today, asset_class)
+    now_naive = (fetched_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    now_naive = now_naive.replace(tzinfo=None)
 
     if frame is None or frame.empty:
         return Provenance(
@@ -221,7 +229,17 @@ def build_provenance(
 
     last_candle = frame.index[-1].date()
     age = (today - last_candle).days
-    stale = is_stale(last_candle, today, asset_class)
+    if interval == "1d":
+        stale = is_stale(last_candle, today, asset_class)
+        display_last = str(last_candle)
+        display_expected = str(expected)
+    else:
+        # Intraday bars are judged against the session calendar in naive-UTC
+        # timestamps, which is what the caches store.
+        stale = intraday_stale(frame.index[-1].to_pydatetime(), now_naive,
+                               asset_class, interval)
+        display_last = str(frame.index[-1])
+        display_expected = str(expected_last_intraday_bar(now_naive, asset_class, interval))
     if outcome is RefreshOutcome.REFRESHED:
         status = CacheStatus.FRESH.value if not stale else CacheStatus.STALE.value
     else:
@@ -229,8 +247,8 @@ def build_provenance(
 
     return Provenance(
         symbol=symbol, status=status, provider=provider, path=str(csv_path),
-        rows=len(frame), last_candle=str(last_candle), cache_age_days=float(age),
-        expected_last_candle=str(expected), stale=stale, outcome=outcome.value,
+        rows=len(frame), last_candle=display_last, cache_age_days=float(age),
+        expected_last_candle=display_expected, stale=stale, outcome=outcome.value,
         fetched_at=fetched_at.isoformat(timespec="seconds") if fetched_at else None,
         detail=detail, trigger=trigger,
     )

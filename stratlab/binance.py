@@ -30,6 +30,10 @@ _TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
 # Binance caps a klines call at 1000 rows; a multi-year history needs paging.
 _MAX_LIMIT = 1000
 
+_INTERVALS = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "1d"}
+# The app names intervals the Yahoo way; Binance spells hourly bars "1h".
+_YAHOO_TO_BINANCE = {"60m": "1h", "90m": "1h", "1h": "1h"}
+
 
 def binance_pair(symbol: str) -> str:
     """BTC -> BTCUSDT. Binance quotes spot against USDT."""
@@ -81,6 +85,20 @@ def daily_klines(symbol: str, start: str, end: str, timeout: float = 15.0) -> pd
     download as "keep the existing cache", so a short frame would be worse than
     an exception.
     """
+    frame = klines(symbol, "1d", start, end, timeout=timeout)
+    frame.index = frame.index.normalize()
+    return frame
+
+
+def klines(symbol: str, interval: str, start: str, end: str,
+           timeout: float = 15.0) -> pd.DataFrame:
+    """Intraday or daily bars for one crypto symbol, naïve-UTC timestamps.
+
+    A UTC-day interval keeps the whole timestamp (it is already a midnight);
+    daily_klines is the one that normalises to dates.
+    """
+    if interval not in _INTERVALS:
+        interval = _YAHOO_TO_BINANCE.get(interval, "1d")
     pair = binance_pair(symbol)
     start_ms = int(pd.Timestamp(start).tz_localize("UTC").timestamp() * 1000)
     # yfinance treats `end` as exclusive; Binance treats endTime as inclusive.
@@ -91,7 +109,7 @@ def daily_klines(symbol: str, start: str, end: str, timeout: float = 15.0) -> pd
     while cursor < end_ms:
         page = _request({
             "symbol": pair,
-            "interval": "1d",
+            "interval": interval,
             "startTime": cursor,
             "endTime": end_ms,
             "limit": _MAX_LIMIT,
@@ -117,6 +135,5 @@ def daily_klines(symbol: str, start: str, end: str, timeout: float = 15.0) -> pd
         "volume": [float(r[5]) for r in rows],
     }, index=pd.to_datetime([r[0] for r in rows], unit="ms").tz_localize(None))
     frame = frame[~frame.index.duplicated(keep="last")].sort_index()
-    frame.index = frame.index.normalize()
     frame.index.name = "date"
     return frame

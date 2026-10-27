@@ -7,9 +7,12 @@ the price an open position is valued at, and the price the dashboard shows.
 One source per asset class, because they are not the same kind of price:
 
 * crypto - Binance's spot ticker. Free, no account, no key, and genuinely live.
-* equities - Yahoo's one-minute chart. Free, no key, and delayed by roughly a
-  quarter of an hour for NSE names. There is no key-free live NSE source, so a
-  delayed price is the honest best available and is labelled as such.
+* equities - Yahoo's one-minute chart. Free, no key. Measured on the live
+  2026-10-26 NSE session, prints arrived six to sixteen seconds old, so this
+  is treated as a near-live mark: `delayed` is derived from the print's age
+  at fetch time rather than assumed, and a print that arrives too old is
+  refused instead of being trusted to drive stops. If Yahoo reverts to a
+  delayed regime the same rules degrade safely to the completed bars.
 
 Every quote is optional. A provider that fails, is slow, or returns a price too
 old to trust leaves the daily bar in charge, exactly as it was before.
@@ -22,7 +25,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -36,10 +39,14 @@ CRYPTO_SOURCE = "binance.ticker"
 EQUITY_SOURCE = "yahoo.intraday"
 
 # How old a quote may be before it is refused. A crypto print is seconds old,
-# so two minutes is already a broken feed. Yahoo's NSE data runs a quarter of
-# an hour behind, so an hour is still a live session rather than a stale close.
+# so two minutes is already a broken feed. Measured 26 Oct 2026 on the NSE
+# session, Yahoo printed marks 6-16s old: 180s is three freshness TTLs, so a
+# stalled publisher hands stops to the completed bars within minutes, not an
+# hour later.
 CRYPTO_MAX_AGE_SECONDS = 120.0
-EQUITY_MAX_AGE_SECONDS = 3600.0
+EQUITY_MAX_AGE_SECONDS = 180.0
+# A print this far behind at fetch time is labelled delayed rather than live.
+EQUITY_DELAY_THRESHOLD_SECONDS = 90.0
 
 
 @dataclass(frozen=True)
@@ -66,8 +73,9 @@ class Quote:
 def yahoo_intraday_last(yahoo_symbol: str, timeout: float = 8.0) -> tuple[float, datetime]:
     """The newest one-minute close Yahoo publishes for a symbol, and when it printed.
 
-    NSE names arrive here about fifteen minutes late. The price is real, it is
-    just late, and the quote says so instead of pretending otherwise.
+    Measured on the live 2026-10-26 NSE session these prints ran seconds old.
+    The delay regime may return, so callers must not assume either: the stamp
+    is the only thing that says what the print is worth.
     """
     response = requests.get(
         YAHOO_CHART.format(symbol=yahoo_symbol),
@@ -83,7 +91,11 @@ def yahoo_intraday_last(yahoo_symbol: str, timeout: float = 8.0) -> tuple[float,
     for stamp, close in zip(reversed(stamps), reversed(closes)):
         if close is None:
             continue
-        return float(close), datetime.fromtimestamp(int(stamp), tz=timezone.utc)
+        ts = datetime.fromtimestamp(int(stamp), tz=timezone.utc)
+        if ts > datetime.now(timezone.utc) + timedelta(seconds=30):
+            raise RuntimeError(
+                f"{yahoo_symbol}: publisher stamp {ts.isoformat()} is in the future; clock skew")
+        return float(close), ts
     raise RuntimeError(f"{yahoo_symbol}: no intraday print in the response")
 
 
@@ -137,5 +149,7 @@ class QuoteService:
                          source=CRYPTO_SOURCE, delayed=False,
                          max_age_seconds=CRYPTO_MAX_AGE_SECONDS)
         price, ts = yahoo_intraday_last(instrument.yfinance_symbol, timeout=self.timeout)
+        age_at_fetch = (datetime.now(timezone.utc) - ts).total_seconds()
         return Quote(symbol=symbol, price=price, ts=ts, source=EQUITY_SOURCE,
-                     delayed=True, max_age_seconds=EQUITY_MAX_AGE_SECONDS)
+                     delayed=age_at_fetch > EQUITY_DELAY_THRESHOLD_SECONDS,
+                     max_age_seconds=EQUITY_MAX_AGE_SECONDS)

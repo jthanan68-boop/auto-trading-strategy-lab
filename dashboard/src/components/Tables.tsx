@@ -1,7 +1,7 @@
 import type { Fill, Position, Signal } from "../api";
 
 function money(value: number): string {
-  return value.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  return `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 
 function qty(value: number): string {

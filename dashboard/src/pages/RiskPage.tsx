@@ -1,9 +1,10 @@
-import { api } from "../api";
+import { api, controlEnabled } from "../api";
 import { RiskLog } from "../components/RiskLog";
 import { money, type Bot } from "../useBot";
 
 export function RiskPage({ bot }: { bot: Bot }) {
   const { status, events, busy } = bot;
+  const controlsEnabled = controlEnabled();
   const limits = status?.limits;
   const cap = limits?.max_total_exposure ?? 0;
   const used = status && cap > 0 ? Math.min(100, (status.exposure / cap) * 100) : 0;
@@ -82,10 +83,16 @@ export function RiskPage({ bot }: { bot: Bot }) {
               fails closed rather than acting without authorisation.
             </p>
           )}
+          {!controlsEnabled && status?.control_enabled && (
+            <p className="killzone-note dim">
+              Disabled. This browser build was built without <code>VITE_CONTROL_TOKEN</code>, so
+              operator controls are unavailable in this UI.
+            </p>
+          )}
         </div>
         <button
           className="btn btn-kill"
-          disabled={busy || !status?.control_enabled}
+          disabled={busy || !status?.control_enabled || !controlsEnabled}
           onClick={() => bot.run(api.emergencyStop)}
         >
           Halt and flatten

@@ -42,7 +42,10 @@ def db_and_engine(tmp_path, monkeypatch):
     import stratbot.engine as engine_module
 
     db = Database(tmp_path / "e2e.sqlite3")
-    config = BotConfig(symbols=("BTC",), initial_cash=500_000.0)
+    # These are daily-style engine mechanics; pin the style and strategy they
+    # were written against, because the configuration default is intraday.
+    config = BotConfig(symbols=("BTC",), initial_cash=500_000.0,
+                       strategy_name="donchian-55/20", trading_style="daily")
     engine = engine_module.Engine(config, db, broker=PaperBroker(config.initial_cash))
 
     history = rising_history()
@@ -120,9 +123,12 @@ def test_daily_loss_limit_stops_further_buying(tmp_path, monkeypatch):
     from datetime import timedelta
 
     db = Database(tmp_path / "loss.sqlite3")
+    # Daily-mode loss-limit mechanics; the configuration default is intraday.
     config = BotConfig(
         symbols=("BTC",),
         initial_cash=500_000.0,
+        strategy_name="donchian-55/20",
+        trading_style="daily",
         limits=RiskLimits(max_daily_loss=1.0),
     )
     engine = engine_module.Engine(config, db, broker=PaperBroker(config.initial_cash))

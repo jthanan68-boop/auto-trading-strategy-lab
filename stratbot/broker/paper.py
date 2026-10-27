@@ -11,7 +11,7 @@ import random
 from dataclasses import dataclass
 from typing import Protocol
 
-from stratlab.costs import cost_model_for
+from stratlab.costs import INTRADAY, MARKET, cost_model_for
 
 from ..models import (
     AccountState,
@@ -65,7 +65,8 @@ class PaperBroker:
     name = "paper"
 
     def __init__(self, initial_cash: float = 500_000.0, positions: dict[str, Position] | None = None,
-                 execution_model: ExecutionModel | None = None):
+                 execution_model: ExecutionModel | None = None,
+                 trading_style: str = "daily"):
         self.cash = float(initial_cash)
         self.positions: dict[str, Position] = dict(positions) if positions else {}
         self.orders: dict[str, OrderStatus] = {}
@@ -73,6 +74,9 @@ class PaperBroker:
         # None keeps the historical deterministic fill (cost-model slippage only),
         # which older tests pin to the exact price.
         self.execution_model = execution_model
+        # Fee regime follows the style: an intraday session trade settles with
+        # sell-side-only STT and a smaller stamp duty, not delivery rates.
+        self.trading_style = trading_style
         self._rng = random.Random(execution_model.seed) if execution_model else None
 
     # ---- account --------------------------------------------------------
@@ -95,7 +99,10 @@ class PaperBroker:
             status = self.orders[order_id]
             return status, None
 
-        cost = cost_model_for("crypto" if request.symbol in {"BTC", "ETH"} else "equity")
+        cost = cost_model_for(
+            "crypto" if request.symbol in {"BTC", "ETH"} else "equity",
+            market=INTRADAY if self.trading_style == "intraday" else MARKET,
+        )
         reference = execution_price if execution_price > 0 else request.reference_price
         # Slippage is applied once, here. The risk layer sizes quantities at the
         # fill price rather than the reference, so charging it again downstream

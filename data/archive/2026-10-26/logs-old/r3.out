@@ -1,0 +1,8 @@
+2026-10-15 11:41:36 INFO    mode=paper strategy=donchian-55/20 symbols=BTC,ETH,RELIANCE,TCS,INFY
+2026-10-15 11:41:36 INFO    limits: max_position=100000 max_exposure=300000 max_daily_loss=10000 stop_loss=8.0%
+2026-10-15 11:41:36 INFO    db: D:\codes\New folder\data\run3_donchian.sqlite3
+2026-10-15 11:41:36 INFO    log: D:\codes\New folder\logs\engine.log
+2026-10-15 11:41:36 INFO    cycle 1 ok equity=500000.00 exposure=0.00
+2026-10-15 11:43:36 INFO    cycle 2 ok equity=500000.00 exposure=0.00
+2026-10-15 11:45:36 INFO    cycle 3 ok equity=500000.00 exposure=0.00
+2026-10-15 11:47:36 INFO    cycle 4 ok equity=500000.00 exposure=0.00

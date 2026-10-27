@@ -83,7 +83,7 @@ class TestSources:
         assert quotes["BTC"].source == CRYPTO_SOURCE
         assert quotes["BTC"].delayed is False
 
-    def test_equity_uses_the_delayed_intraday_chart(self, monkeypatch):
+    def test_an_aged_equity_print_is_flagged_delayed_and_refused(self, monkeypatch):
         stamp = datetime.now(timezone.utc) - timedelta(minutes=14)
         monkeypatch.setattr(
             "stratbot.broker.quotes.yahoo_intraday_last",
@@ -96,6 +96,40 @@ class TestSources:
         assert quotes["RELIANCE"].price == pytest.approx(1211.75)
         assert quotes["RELIANCE"].source == EQUITY_SOURCE
         assert quotes["RELIANCE"].delayed is True
+        assert quotes["RELIANCE"].usable is False
+
+    def test_a_fresh_equity_print_is_not_flagged_delayed(self, monkeypatch):
+        stamp = datetime.now(timezone.utc) - timedelta(seconds=10)
+        monkeypatch.setattr(
+            "stratbot.broker.quotes.yahoo_intraday_last",
+            lambda symbol, timeout=8.0: (1211.75, stamp),
+        )
+
+        quote = QuoteService([RELIANCE]).quotes()["RELIANCE"]
+
+        assert quote.delayed is False
+        assert quote.usable is True
+
+    def test_a_publisher_stamp_in_the_future_is_refused(self, monkeypatch):
+        from stratbot.broker import quotes as quotes_module
+
+        future = int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"chart": {"result": [{
+                    "timestamp": [future],
+                    "indicators": {"quote": [{"close": [100.0]}]},
+                }]}}
+
+        monkeypatch.setattr(quotes_module.requests, "get",
+                            lambda *args, **kwargs: FakeResponse())
+
+        with pytest.raises(RuntimeError, match="future"):
+            quotes_module.yahoo_intraday_last("RELIANCE.NS")
 
     def test_an_equity_is_never_routed_to_a_crypto_venue(self, monkeypatch):
         def forbidden(*args, **kwargs):

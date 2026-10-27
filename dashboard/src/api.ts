@@ -8,14 +8,21 @@
 
 const BASE = import.meta.env.VITE_API_URL ?? "";
 
+/** Returns request headers. If control=true and token is set, includes X-Control-Token. */
 function headers(control = false): Record<string, string> {
   const base: Record<string, string> = { "Content-Type": "application/json" };
   if (control) {
     const token = import.meta.env.VITE_CONTROL_TOKEN;
-    if (!token) throw new Error("VITE_CONTROL_TOKEN is not set, operator controls are disabled");
-    base["X-Control-Token"] = token;
+    if (token) {
+      base["X-Control-Token"] = token;
+    }
   }
   return base;
+}
+
+/** Returns true if control operations are enabled (token is configured). */
+export function controlEnabled(): boolean {
+  return !!import.meta.env.VITE_CONTROL_TOKEN;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -29,8 +36,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const get = <T,>(path: string) => request<T>(path);
 
-const control = <T,>(path: string) =>
-  request<T>(path, { method: "POST", headers: headers(true) });
+/**
+ * Make a POST request with control headers.
+ * Returns { success: false, reason: string } if controls are disabled
+ * instead of throwing when VITE_CONTROL_TOKEN is not set.
+ */
+const controlSafe = async <T>(path: string): Promise<T | { success: false; reason: string }> => {
+  const token = import.meta.env.VITE_CONTROL_TOKEN;
+  if (!token) {
+    // Return a sentinel instead of throwing so the UI can show disabled state
+    return { success: false, reason: "operator controls disabled: VITE_CONTROL_TOKEN not set" } as T;
+  }
+  return request<T>(path, { method: "POST", headers: headers(true) });
+};
 
 export interface Limits {
   max_position_value: number;
@@ -150,7 +168,10 @@ export const api = {
   bars: (symbol: string, limit = 180) =>
     get<{ symbol: string; bars: Bar[] }>(`/api/bars/${encodeURIComponent(symbol)}?limit=${limit}`),
 
-  emergencyStop: () => control<{ halted: boolean; cancelled: number; flattened: string[] }>("/api/emergency-stop"),
-  resume: () => control<{ halted: boolean }>("/api/resume"),
-  runCycle: () => control<{ cycle: number; halted: boolean; equity: number; decisions: string[] }>("/api/cycle"),
+  emergencyStop: () =>
+    controlSafe<{ halted: boolean; cancelled: number; flattened: string[] }>("/api/emergency-stop"),
+  resume: () =>
+    controlSafe<{ halted: boolean }>("/api/resume"),
+  runCycle: () =>
+    controlSafe<{ cycle: number; halted: boolean; equity: number; decisions: string[] }>("/api/cycle"),
 };

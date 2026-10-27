@@ -103,7 +103,7 @@ export function useBot() {
 export type Bot = ReturnType<typeof useBot>;
 
 export function money(value: number): string {
-  return value.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  return `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 
 export function signed(value: number): string {

@@ -1,0 +1,40 @@
+2026-10-15 11:05:53 INFO    mode=paper strategy=buy-and-hold symbols=BTC,ETH,RELIANCE,TCS,INFY
+2026-10-15 11:05:53 INFO    limits: max_position=100000 max_exposure=300000 max_daily_loss=10000 stop_loss=8.0%
+2026-10-15 11:05:53 INFO    db: D:\codes\New folder\data\run10min.sqlite3
+2026-10-15 11:05:53 INFO    log: D:\codes\New folder\logs\engine.log
+2026-10-15 11:05:53 INFO    cycle 1 ok equity=499681.33 exposure=300049.95
+2026-10-15 11:05:53 INFO        BTC BUY 5.998810 -> filled 1.199762 @ 83391.53
+2026-10-15 11:05:53 INFO        ETH BUY 199.856051 -> filled 39.979210 @ 2502.55
+2026-10-15 11:05:53 INFO        RELIANCE BUY 425.506479 -> filled 85.050232 @ 1175.19
+2026-10-15 11:05:53 INFO        TCS BUY 216.790903 -> rejected: total exposure cap reached
+2026-10-15 11:05:53 INFO        INFY BUY 459.265929 -> rejected: total exposure cap reached
+2026-10-15 11:07:54 INFO    cycle 2 ok equity=499531.38 exposure=299900.00
+2026-10-15 11:07:54 INFO        BTC BUY 4.793426 -> rejected: duplicate order id, already submitted
+2026-10-15 11:07:54 INFO        ETH BUY 159.729490 -> rejected: duplicate order id, already submitted
+2026-10-15 11:07:54 INFO        RELIANCE BUY 340.227643 -> rejected: duplicate order id, already submitted
+2026-10-15 11:07:54 INFO        TCS BUY 216.725846 -> rejected: duplicate order id, already submitted
+2026-10-15 11:07:54 INFO        INFY BUY 459.128107 -> rejected: duplicate order id, already submitted
+2026-10-15 11:09:54 INFO    cycle 3 ok equity=499531.38 exposure=299900.00
+2026-10-15 11:09:54 INFO        BTC BUY 4.793426 -> rejected: duplicate order id, already submitted
+2026-10-15 11:09:54 INFO        ETH BUY 159.729490 -> rejected: duplicate order id, already submitted
+2026-10-15 11:09:54 INFO        RELIANCE BUY 340.227643 -> rejected: duplicate order id, already submitted
+2026-10-15 11:09:54 INFO        TCS BUY 216.725846 -> rejected: duplicate order id, already submitted
+2026-10-15 11:09:54 INFO        INFY BUY 459.128107 -> rejected: duplicate order id, already submitted
+2026-10-15 11:11:55 INFO    cycle 4 ok equity=499531.38 exposure=299900.00
+2026-10-15 11:11:55 INFO        BTC BUY 4.793426 -> rejected: duplicate order id, already submitted
+2026-10-15 11:11:55 INFO        ETH BUY 159.729490 -> rejected: duplicate order id, already submitted
+2026-10-15 11:11:55 INFO        RELIANCE BUY 340.227643 -> rejected: duplicate order id, already submitted
+2026-10-15 11:11:55 INFO        TCS BUY 216.725846 -> rejected: duplicate order id, already submitted
+2026-10-15 11:11:55 INFO        INFY BUY 459.128107 -> rejected: duplicate order id, already submitted
+2026-10-15 11:13:55 INFO    cycle 5 ok equity=499531.38 exposure=299900.00
+2026-10-15 11:13:55 INFO        BTC BUY 4.793426 -> rejected: duplicate order id, already submitted
+2026-10-15 11:13:55 INFO        ETH BUY 159.729490 -> rejected: duplicate order id, already submitted
+2026-10-15 11:13:55 INFO        RELIANCE BUY 340.227643 -> rejected: duplicate order id, already submitted
+2026-10-15 11:13:55 INFO        TCS BUY 216.725846 -> rejected: duplicate order id, already submitted
+2026-10-15 11:13:55 INFO        INFY BUY 459.128107 -> rejected: duplicate order id, already submitted
+2026-10-15 11:15:56 INFO    cycle 6 ok equity=499531.38 exposure=299900.00
+2026-10-15 11:15:56 INFO        BTC BUY 4.793426 -> rejected: duplicate order id, already submitted
+2026-10-15 11:15:56 INFO        ETH BUY 159.729490 -> rejected: duplicate order id, already submitted
+2026-10-15 11:15:56 INFO        RELIANCE BUY 340.227643 -> rejected: duplicate order id, already submitted
+2026-10-15 11:15:56 INFO        TCS BUY 216.725846 -> rejected: duplicate order id, already submitted
+2026-10-15 11:15:56 INFO        INFY BUY 459.128107 -> rejected: duplicate order id, already submitted

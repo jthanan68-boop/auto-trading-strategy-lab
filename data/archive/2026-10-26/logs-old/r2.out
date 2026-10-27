@@ -1,0 +1,15 @@
+2026-10-15 11:35:53 INFO    mode=paper strategy=buy-and-hold symbols=BTC,ETH,RELIANCE,TCS,INFY
+2026-10-15 11:35:53 INFO    limits: max_position=100000 max_exposure=300000 max_daily_loss=10000 stop_loss=8.0%
+2026-10-15 11:35:53 INFO    db: D:\codes\New folder\data\run2_bh.sqlite3
+2026-10-15 11:35:53 INFO    log: D:\codes\New folder\logs\engine.log
+2026-10-15 11:35:54 INFO    cycle 1 ok equity=499666.44 exposure=300029.94
+2026-10-15 11:35:54 INFO        targets requested 5.00 of equity, scaled to 0.60 across 5 symbols
+2026-10-15 11:35:54 INFO        BTC BUY 0.719857 -> filled 0.719857 @ 83391.53
+2026-10-15 11:35:54 INFO        ETH BUY 23.987526 -> filled 23.987526 @ 2502.55
+2026-10-15 11:35:54 INFO        RELIANCE BUY 51.081220 -> filled 51.081220 @ 1175.19
+2026-10-15 11:35:54 INFO        TCS BUY 26.031499 -> filled 26.031499 @ 2306.05
+2026-10-15 11:35:54 INFO        INFY BUY 55.147059 -> filled 55.036765 @ 1088.54
+2026-10-15 11:37:54 INFO    cycle 2 ok equity=499516.50 exposure=299880.00
+2026-10-15 11:37:54 INFO        targets requested 5.00 of equity, scaled to 0.60 across 5 symbols
+2026-10-15 11:39:54 INFO    cycle 3 ok equity=499516.50 exposure=299880.00
+2026-10-15 11:39:54 INFO        targets requested 5.00 of equity, scaled to 0.60 across 5 symbols
