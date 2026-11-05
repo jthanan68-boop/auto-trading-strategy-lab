@@ -1,5 +1,7 @@
 name: stratbot-cron
 
+# Cron is best-effort: GitHub can delay or drop a scheduled trigger under load.
+
 # One paper cycle per trigger, state carried between runs in the `state` branch.
 # Mirrors start_crypto.bat: same DB, same symbols, same flags, no server.
 
