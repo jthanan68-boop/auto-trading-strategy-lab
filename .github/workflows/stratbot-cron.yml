@@ -1,0 +1,60 @@
+name: stratbot-cron
+
+# One paper cycle per trigger, state carried between runs in the `state` branch.
+# Mirrors start_crypto.bat: same DB, same symbols, same flags, no server.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# GitHub may overlap triggers under load; two cycles on one ledger would double-fill.
+concurrency:
+  group: stratbot-cycle
+  cancel-in-progress: false
+
+env:
+  DB: data/crypto.sqlite3
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore ledger
+        run: |
+          mkdir -p data
+          git fetch origin state:refs/remotes/origin/state --depth=1 2>/dev/null || true
+          git show refs/remotes/origin/state:${DB} > ${DB} 2>/dev/null || rm -f ${DB}
+
+      - name: Run one cycle
+        run: |
+          python run_bot.py --cycles 1 --refresh --no-backup \
+            --db "${DB}" --symbols BTC,ETH \
+            --style intraday --interval 5m \
+            --portfolio --portfolio-cadence weekly
+
+      - name: Save ledger
+        if: always()
+        run: |
+          test -f "${DB}" || exit 0
+          git config user.name "stratbot"
+          git config user.email "stratbot@users.noreply.github.com"
+          git checkout --orphan state-tmp
+          git rm -rf --cached . -q
+          git add -f "${DB}"
+          git commit -q -m "state"
+          git push -f origin state-tmp:state
