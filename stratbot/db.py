@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS positions (
     qty        REAL NOT NULL DEFAULT 0,
     avg_price  REAL NOT NULL DEFAULT 0,
     opened_at  TEXT,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    entry_fees REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS equity (
@@ -114,9 +115,44 @@ ORDER_COLUMN_MIGRATIONS = (
     ("execution_bar_ts", "TEXT"),
 )
 
+# Same additive pattern, for the book. An older file has no entry_fees, so a
+# restart used to lose the entry leg of every open position's cost.
+POSITION_COLUMN_MIGRATIONS = (
+    ("entry_fees", "REAL NOT NULL DEFAULT 0"),
+)
+
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def backup_database(path, keep: int = 10):
+    """Snapshot the ledger beside it, and keep only the newest `keep`.
+
+    Called before a long-lived run opens the file, while the instance lock still
+    guarantees nobody else is writing. The sqlite backup API is used rather than a
+    file copy because the ledger runs in WAL mode: copying the .sqlite3 alone can
+    miss rows that only exist in the -wal.
+    """
+    source_path = Path(path)
+    if not source_path.exists():
+        return None
+    target_dir = source_path.parent / "backups"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stamp = utcnow().strftime("%Y%m%dT%H%M%S")
+    target = target_dir / f"{source_path.stem}-{stamp}.sqlite3"
+    source = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+    try:
+        destination = sqlite3.connect(target)
+        try:
+            source.backup(destination)
+        finally:
+            destination.close()
+    finally:
+        source.close()
+    for stale in sorted(target_dir.glob(f"{source_path.stem}-*.sqlite3"))[:-keep]:
+        stale.unlink(missing_ok=True)
+    return target
 
 
 def _parse(value: str | None) -> datetime | None:
@@ -143,6 +179,11 @@ class Database:
         for name, kind in ORDER_COLUMN_MIGRATIONS:
             if name not in existing:
                 conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {kind}")
+
+        held = {row["name"] for row in conn.execute("PRAGMA table_info(positions)")}
+        for name, kind in POSITION_COLUMN_MIGRATIONS:
+            if name not in held:
+                conn.execute(f"ALTER TABLE positions ADD COLUMN {name} {kind}")
 
     @contextmanager
     def connect(self):
@@ -279,12 +320,13 @@ class Database:
     def upsert_position(self, position: Position):
         with self.connect() as conn:
             conn.execute(
-                "INSERT INTO positions (symbol,qty,avg_price,opened_at,updated_at)"
-                " VALUES (?,?,?,?,?) ON CONFLICT(symbol) DO UPDATE SET"
+                "INSERT INTO positions (symbol,qty,avg_price,opened_at,updated_at,entry_fees)"
+                " VALUES (?,?,?,?,?,?) ON CONFLICT(symbol) DO UPDATE SET"
                 " qty=excluded.qty, avg_price=excluded.avg_price,"
-                " opened_at=excluded.opened_at, updated_at=excluded.updated_at",
+                " opened_at=excluded.opened_at, updated_at=excluded.updated_at,"
+                " entry_fees=excluded.entry_fees",
                 (position.symbol, position.qty, position.avg_price,
-                 _iso(position.opened_at), utcnow().isoformat()),
+                 _iso(position.opened_at), utcnow().isoformat(), position.entry_fees),
             )
 
     def positions(self) -> dict[str, Position]:
@@ -297,6 +339,7 @@ class Database:
                 qty=row["qty"],
                 avg_price=row["avg_price"],
                 opened_at=_parse(row["opened_at"]),
+                entry_fees=row["entry_fees"] or 0.0,
             )
         return out
 
@@ -305,7 +348,7 @@ class Database:
         with self.connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO equity (ts,equity,cash,exposure,unrealised) VALUES (?,?,?,?,?)",
-                (utcnow().isoformat(), equity, cash, exposure, unrealised),
+                (utcnow().isoformat(timespec="milliseconds"), equity, cash, exposure, unrealised),
             )
 
     def equity_history(self, limit=2000) -> list[dict]:
@@ -345,6 +388,21 @@ class Database:
             row = conn.execute("SELECT COALESCE(SUM(fees), 0) total FROM fills").fetchone()
         return float(row["total"])
 
+    def cash_flow(self) -> float:
+        """Net cash effect of every fill: a buy spends notional plus fees, a sell returns notional less fees.
+
+        Replaying the fills is how a restart rebuilds cash without inventing a
+        number: summing the signed legs is exactly the arithmetic the broker
+        applied, so realised P/L and every fee survive the restart.
+        """
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(CASE WHEN side='BUY'"
+                " THEN -(qty * price + fees) ELSE qty * price - fees END), 0) total"
+                " FROM fills"
+            ).fetchone()
+        return float(row["total"])
+
     def open_position_cost(self) -> float:
         with self.connect() as conn:
             row = conn.execute(
@@ -381,7 +439,7 @@ class Database:
         with self.connect() as conn:
             conn.execute(
                 "INSERT INTO risk_events (ts,kind,detail) VALUES (?,?,?)",
-                (utcnow().isoformat(), kind, detail),
+                (utcnow().isoformat(timespec="milliseconds"), kind, detail),
             )
 
     def recent_risk_events(self, limit=100) -> list[dict]:

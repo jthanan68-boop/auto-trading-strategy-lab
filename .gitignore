@@ -34,3 +34,10 @@ logs/
 .idea/
 .DS_Store
 Thumbs.db
+
+# React Native app
+rnapp/node_modules/
+rnapp/android/
+rnapp/ios/
+rnapp/.expo/
+rnapp/package-lock.json

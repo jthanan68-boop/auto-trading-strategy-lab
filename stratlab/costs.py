@@ -110,6 +110,20 @@ BINANCE_SPOT = CostModel(
 
 CRYPTO_SPOT = BINANCE_SPOT
 
+# CME futures: no statutory charge. Commission is per contract, which lands near
+# 0.3 bp of a typical notional, and the overnight gap widens slippage.
+US_FUTURES = CostModel(
+    name="US futures",
+    exchange_txn=0.00003,
+    slippage_bps=8.0,
+)
+
+# Spot FX: the spread is the cost. No STT, stamp duty or exchange levy applies.
+FX_SPOT = CostModel(
+    name="FX spot",
+    slippage_bps=2.0,
+)
+
 MARKET = "market"
 INTRADAY = "intraday"
 
@@ -118,6 +132,10 @@ def cost_model_for(asset_class: str, market: str = MARKET) -> CostModel:
     asset_class = asset_class.lower()
     if asset_class in {"crypto", "cryptocurrency"}:
         return CRYPTO_SPOT
+    if asset_class in {"commodity", "metal"}:
+        return US_FUTURES
+    if asset_class == "fx":
+        return FX_SPOT
     if market == INTRADAY:
         return INDIA_EQUITY_INTRADAY
     return INDIA_EQUITY_DELIVERY

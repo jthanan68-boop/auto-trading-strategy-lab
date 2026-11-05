@@ -454,6 +454,10 @@ tests/               full regression suite (run `.\.venv\Scripts\python -m pytes
    Parameter tuning on 4 trades is guaranteed overfitting.
 4. **Phase 4 stays gated** until the run beats buy-and-hold on live paper.
 
+What is built, blocked and next — including the 24/7 hosting setup — is the
+living list in [deploy/GITHUB_ACTIONS.md](deploy/GITHUB_ACTIONS.md#status--todo),
+updated in the same commit as every change.
+
 ## Phase 4 readiness: built, live trading: not built
 
 A live broker adapter is deliberately absent, and adding one would contradict the

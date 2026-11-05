@@ -8,7 +8,7 @@ move. All orders here are simulated; no broker is contacted.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from stratbot.broker.paper import PaperBroker
 from stratbot.config import RiskLimits, intraday_limits
@@ -34,6 +34,20 @@ def aged_bar(symbol: str, minutes: float = 5.0, days: float = 0.0) -> Bar:
 
 def account(equity: float = 1_000_000, positions=None) -> AccountState:
     return AccountState(cash=equity, positions=positions or {})
+
+
+class OneBarFeed:
+    """The minimum a cycle reads: one current bar, no history, no provenance."""
+
+    def __init__(self, bar: Bar):
+        self.bar = bar
+        self.provenance: dict = {}
+
+    def bars(self, force_refresh: bool = False) -> dict[str, Bar]:
+        return {self.bar.symbol: self.bar}
+
+    def history(self, symbol: str):
+        return None
 
 
 class TestIntradayLimitsProfile:
@@ -199,6 +213,46 @@ class TestEngineGates:
         gates = engine._freshness_gates(bars)
         assert gates["RELIANCE"] is True  # bar stamped today -> strictly judged
 
+    def _pinned(self, monkeypatch, now):
+        """Pin the clock the engine and Bar.age_seconds read (naive-UTC input)."""
+        from stratbot import engine as engine_module, models
+
+        fixed = now.replace(tzinfo=timezone.utc)
+        monkeypatch.setattr(engine_module, "utcnow", lambda: fixed)
+        monkeypatch.setattr(models, "utcnow", lambda: fixed)
+
+    def _cycling_engine(self, tmp_path, bar_ts):
+        from stratbot.config import BotConfig
+        from stratbot.engine import Engine
+
+        bar = Bar(symbol="RELIANCE", ts=bar_ts, open=100.0, high=101.0,
+                  low=99.0, close=100.0)
+        config = BotConfig(symbols=("RELIANCE",), strategy_name="buy-and-hold",
+                           trading_style="intraday", bar_interval="5m",
+                           limits=intraday_limits())
+        return Engine(config, Database(tmp_path / "stale.sqlite3"),
+                      feed=OneBarFeed(bar))
+
+    def test_a_closed_session_does_not_halt_on_bar_age(self, tmp_path, monkeypatch):
+        # 18:30 IST: the newest bar is three hours old on a perfectly healthy feed.
+        self._pinned(monkeypatch, datetime(2026, 11, 3, 13, 0))
+        engine = self._cycling_engine(tmp_path, datetime(2026, 11, 3, 9, 55))
+
+        result = engine.cycle()
+
+        assert result.halt_reason is None
+        assert not engine.risk.halted
+
+    def test_bar_age_still_halts_inside_the_session(self, tmp_path, monkeypatch):
+        # 14:30 IST on the same day: 125 minutes without a bar is a dead feed.
+        self._pinned(monkeypatch, datetime(2026, 11, 3, 9, 0))
+        engine = self._cycling_engine(tmp_path, datetime(2026, 11, 3, 6, 55))
+
+        result = engine.cycle()
+
+        assert result.halt_reason == "stale_price"
+        assert engine.risk.halted
+
     def test_intraday_equity_book_gets_the_intraday_cost_model(self, tmp_path):
         equity_only = self._engine(tmp_path, "intraday", ("RELIANCE", "TCS"))
         assert equity_only.cost_model.name == "India equity - intraday"
@@ -227,7 +281,10 @@ class TestBuildConfig:
         assert config.strategy_name == "orb-15min"
         assert config.refresh_interval_minutes == 5
         assert config.poll_seconds == 60
-        assert config.limits == intraday_limits()
+        # Identify the profile by the fields it changes, not by an exact object:
+        # the rupee caps are scaled to initial_cash by BotConfig.__post_init__.
+        assert config.limits.stop_loss_pct == intraday_limits().stop_loss_pct
+        assert config.limits.max_bar_age_minutes == intraday_limits().max_bar_age_minutes
 
     def test_explicit_daily_restores_the_historical_cadence(self):
         from run_bot import build_config
@@ -237,7 +294,9 @@ class TestBuildConfig:
         assert config.strategy_name == "donchian-55/20"
         assert config.refresh_interval_minutes == 60
         assert config.poll_seconds == 300
-        assert config.limits == RiskLimits()
+        # Daily keeps the day-based freshness gate, unlike the intraday profile.
+        assert config.limits.stop_loss_pct == RiskLimits().stop_loss_pct
+        assert config.limits.max_bar_age_minutes is None
 
     def test_intraday_style_applies_the_session_profile(self):
         from run_bot import build_config
@@ -245,7 +304,8 @@ class TestBuildConfig:
         config = build_config(self._args(style="intraday", interval="5m"))
         assert config.trading_style == "intraday"
         assert config.strategy_name == "orb-15min"
-        assert config.limits == intraday_limits()
+        assert config.limits.stop_loss_pct == intraday_limits().stop_loss_pct
+        assert config.limits.max_bar_age_minutes == intraday_limits().max_bar_age_minutes
         assert config.refresh_interval_minutes == 5
         assert config.poll_seconds == 60
 

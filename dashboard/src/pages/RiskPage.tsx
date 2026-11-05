@@ -10,8 +10,9 @@ export function RiskPage({ bot }: { bot: Bot }) {
   const used = status && cap > 0 ? Math.min(100, (status.exposure / cap) * 100) : 0;
   const dayPnl = status?.day_pnl ?? 0;
   const lossLimit = limits?.max_daily_loss ?? 0;
+  const lossAmount = Math.max(0, -dayPnl);
   const lossUsed = lossLimit > 0
-    ? Math.min(100, (Math.max(0, -dayPnl) / lossLimit) * 100)
+    ? Math.min(100, (lossAmount / lossLimit) * 100)
     : 0;
 
   return (
@@ -38,8 +39,8 @@ export function RiskPage({ bot }: { bot: Bot }) {
                       style={{ width: `${lossUsed}%` }} />
               </span>
             </div>
-            <div className={`figure-value ${dayPnl < 0 ? "neg" : ""}`}>
-              {status ? money(dayPnl) : "-"}
+            <div className={`figure-value ${lossAmount > 0 ? "neg" : ""}`}>
+              {status ? money(lossAmount) : "-"}
               <span className="figure-of">limit {money(lossLimit)}</span>
             </div>
           </div>

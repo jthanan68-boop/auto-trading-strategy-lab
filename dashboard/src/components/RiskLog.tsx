@@ -8,7 +8,10 @@ export function RiskLog({ events }: { events: RiskEvent[] }) {
       {events.map((event) => (
         <div className="event" key={event.id}>
           <span className="event-time">
-            {new Date(event.ts).toLocaleTimeString("en-IN", { timeStyle: "medium" })}
+            {(() => {
+              const d = new Date(event.ts);
+              return isNaN(d.getTime()) ? "-" : d.toLocaleTimeString("en-IN", { timeStyle: "medium" });
+            })()}
           </span>
           <span className="event-kind" style={{ color: tone(event.kind) }}>{event.kind}</span>
           <span className="event-detail">{event.detail}</span>

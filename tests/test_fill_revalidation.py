@@ -10,6 +10,7 @@ and a strategy error at fill time fails open so a queue is never stranded.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 
 import pandas as pd
@@ -21,7 +22,7 @@ from stratbot.broker.paper import PaperBroker
 from stratbot.config import BotConfig
 from stratbot.db import Database
 from stratbot.engine import Engine
-from stratbot.models import Bar, OrderStatus, Side, utcnow
+from stratbot.models import Bar, OrderRequest, OrderStatus, Side, utcnow
 
 SYMBOL = "NTPC"
 INITIAL_CASH = 500_000.0
@@ -81,11 +82,14 @@ def intraday_clock(monkeypatch):
                         lambda now, asset_class: "active")
 
 
-def build_engine(tmp_path, strategy: ScriptedLong) -> Engine:
+def build_engine(tmp_path, strategy: ScriptedLong, portfolio: bool = False) -> Engine:
     config = BotConfig(
         symbols=(SYMBOL,), strategy_name="orb-15min", trading_style="intraday",
         bar_interval="5m",
     )
+    if portfolio:
+        config = replace(config, portfolio=replace(
+            config.portfolio, enabled=True))
     engine = Engine(
         config, Database(tmp_path / "revalidate.sqlite3"),
         broker=PaperBroker(INITIAL_CASH, trading_style="intraday"),
@@ -149,4 +153,24 @@ def test_without_the_flag_a_dead_setup_fills_as_before(tmp_path):
     assert not any("cancelled" in f.get("reason", "") for f in fills)
     assert all(r["status"] != OrderStatus.CANCELLED.value
                for r in engine.db.pending_orders())
+    assert engine.broker.positions[SYMBOL].qty > 0
+
+
+@pytest.mark.usefixtures("intraday_clock")
+def test_portfolio_entry_is_not_vetoed_by_the_symbol_strategy(tmp_path):
+    # In portfolio mode the entry comes from a portfolio target, so the
+    # per-symbol strategy's opinion must not cancel it at fill time.
+    engine = build_engine(tmp_path, ScriptedLong(), portfolio=True)
+    engine.strategies[SYMBOL].alive = False
+    bar = Bar(symbol=SYMBOL, ts=utcnow().replace(tzinfo=None), open=100.0,
+              high=100.2, low=99.8, close=100.0, volume=1000.0)
+    request = OrderRequest(
+        symbol=SYMBOL, side=Side.BUY, qty=10.0, strategy="orb-15min",
+        signal_bar_ts=bar.ts, target_weight=0.1,
+    )
+    engine.db.record_order(request, OrderStatus.NEW)
+
+    engine._fill(request, bar, 100.0)
+
+    assert engine.db.order_status(request.client_order_id) == OrderStatus.FILLED.value
     assert engine.broker.positions[SYMBOL].qty > 0

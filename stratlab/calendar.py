@@ -21,6 +21,19 @@ NSE_CLOSE_UTC_HOUR = 10  # 15:30 IST
 # 09:15 IST open, expressed as minutes past midnight UTC on the session day.
 NSE_OPEN_MINUTES_UTC = 3 * 60 + 45
 
+# Commodity futures and spot FX run nearly around the clock on weekdays and shut
+# for the weekend, so their session is the UTC day up to the New York close.
+CONTINUOUS_ASSET_CLASSES = frozenset({"commodity", "metal", "fx"})
+CONTINUOUS_CLOSE_UTC_HOUR = 22  # 17:00 ET
+
+# Where the opening range is measured from. FX liquidity arrives with London and
+# metals/energy buy their volume at the New York open; anchoring at the UTC
+# midnight rollover would build the range out of the deadest hour of the day.
+# Fixed UTC hours on purpose: this file models the weekend calendar only, and a
+# DST-tracking anchor would be a promise it cannot keep.
+FX_RANGE_START_UTC_HOUR = 8
+FUTURES_RANGE_START_UTC_HOUR = 14
+
 INTRADAY_INTERVAL_MINUTES = {
     "1m": 1, "2m": 2, "5m": 5, "15m": 15, "30m": 30, "60m": 60, "1d": 1440,
 }
@@ -31,6 +44,13 @@ def interval_minutes(interval: str) -> int:
     if minutes is None:
         raise ValueError(f"unsupported interval: {interval}")
     return minutes
+
+
+def close_hour_utc(asset_class: str) -> int:
+    """UTC hour after which the session behind a daily bar stops being revised."""
+    if asset_class in CONTINUOUS_ASSET_CLASSES:
+        return CONTINUOUS_CLOSE_UTC_HOUR
+    return NSE_CLOSE_UTC_HOUR
 
 
 def floor_to_interval(ts: datetime, interval: str) -> datetime:
@@ -46,14 +66,40 @@ def session_bounds(day: date, asset_class: str) -> tuple[datetime, datetime]:
 
     Indian equities run 09:15-15:30 IST, stored here as UTC 03:45-10:00 to match
     the naive-UTC bar timestamps the caches keep. Crypto has no close; its
-    session is simply the whole UTC day.
+    session is simply the whole UTC day. Commodity futures and spot FX trade the
+    UTC day up to the New York close and are shut all weekend, so a weekend gets
+    a zero-length window: nothing is open, so nothing can be judged late.
     """
     if asset_class == "crypto":
         start = datetime.combine(day, time.min)
         return start, start + timedelta(days=1)
+    if asset_class in CONTINUOUS_ASSET_CLASSES:
+        start = datetime.combine(day, time.min)
+        if is_weekend(day):
+            return start, start
+        return start, datetime.combine(day, time(hour=CONTINUOUS_CLOSE_UTC_HOUR))
     start = datetime.combine(day, time(hour=NSE_OPEN_MINUTES_UTC // 60,
                                        minute=NSE_OPEN_MINUTES_UTC % 60))
     return start, datetime.combine(day, time(hour=NSE_CLOSE_UTC_HOUR))
+
+
+def opening_range_start(day: date, asset_class: str) -> datetime:
+    """Naive-UTC start of the window an opening range is measured from.
+
+    Crypto and equity keep their session start, which is a real open. FX and
+    futures are continuous, so their session starts at UTC midnight; the range
+    is moved to the London or New York open instead so it is built from trading
+    volume rather than the rollover.
+    """
+    start, end = session_bounds(day, asset_class)
+    if asset_class == "fx":
+        anchor = datetime.combine(day, time(hour=FX_RANGE_START_UTC_HOUR))
+    elif asset_class in {"commodity", "metal"}:
+        anchor = datetime.combine(day, time(hour=FUTURES_RANGE_START_UTC_HOUR))
+    else:
+        return start
+    # A weekend has a zero-length session, so the anchor must not outlive it.
+    return min(max(anchor, start), end) if end > start else start
 
 
 def session_state(now: datetime, asset_class: str) -> str:
@@ -153,20 +199,23 @@ def previous_weekday(day: date) -> date:
 def expected_last_bar(
     today: date,
     asset_class: str,
-    now_hour_utc: int = NSE_CLOSE_UTC_HOUR,
+    now_hour_utc: int | None = None,
 ) -> date:
     """Latest date on which a completed daily bar should exist.
 
     Crypto trades every calendar day. Indian equities trade Mon-Fri and close at
     15:30 IST, which is 10:00 UTC, so before that hour a weekday has not produced
     a completed bar yet and the previous session is still the newest one.
+    Commodity and FX bars settle at the New York close instead, so their day is
+    still unfinished until 22:00 UTC.
     """
     if asset_class == "crypto":
         return today
 
+    close_hour = close_hour_utc(asset_class) if now_hour_utc is None else now_hour_utc
     if is_weekend(today):
         return previous_weekday(today)
-    if now_hour_utc < NSE_CLOSE_UTC_HOUR:
+    if close_hour < close_hour_utc(asset_class):
         return previous_weekday(today - timedelta(days=1))
     return today
 
@@ -201,11 +250,12 @@ def session_end(bar_date: date, asset_class: str) -> datetime:
     """When the trading session covered by `bar_date` finished.
 
     Indian equities close at 15:30 IST. Crypto has no close; its UTC day simply
-    rolls over at midnight.
+    rolls over at midnight. Commodity and FX sessions run to the New York close.
     """
     if asset_class == "crypto":
         return datetime.combine(bar_date + timedelta(days=1), time.min, tzinfo=timezone.utc)
-    return datetime.combine(bar_date, time(NSE_CLOSE_UTC_HOUR), tzinfo=timezone.utc)
+    return datetime.combine(bar_date, time(close_hour_utc(asset_class)),
+                            tzinfo=timezone.utc)
 
 
 def session_closed(bar_date: date, asset_class: str, now: datetime | None = None) -> bool:

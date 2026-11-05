@@ -18,8 +18,8 @@ from pathlib import Path
 
 from stratbot.broker.feed import MarketDataFeed
 from stratbot.broker.quotes import QuoteService
-from stratbot.config import CONFIG, DB_PATH, BotConfig, intraday_limits
-from stratbot.db import Database
+from stratbot.config import CONFIG, DB_PATH, BotConfig, RiskLimits, intraday_limits
+from stratbot.db import Database, backup_database
 from stratbot.engine import Engine
 from stratbot.single_instance import InstanceAlreadyRunning, InstanceLock
 
@@ -116,6 +116,13 @@ def parse_args() -> argparse.Namespace:
                         help="intraday bar interval (default: the configured interval)")
     parser.add_argument("--days-history", type=int, default=None,
                         help="days of intraday history to keep cached (default: 12)")
+    parser.add_argument("--portfolio", action="store_true",
+                        help="enable portfolio mode (momentum-ranked, vol-sized, sector-capped)")
+    parser.add_argument("--portfolio-cadence", default=None,
+                        choices=["session_close", "weekly", "monthly"],
+                        help="portfolio rebalance cadence (default: session_close)")
+    parser.add_argument("--no-backup", action="store_true",
+                        help="skip the ledger snapshot taken before a long-lived run")
     return parser.parse_args()
 
 
@@ -157,7 +164,17 @@ def build_config(args) -> BotConfig:
         **overrides,
         **({"initial_cash": args.capital} if args.capital is not None else {}),
         **({"symbols": _parse_symbols(args.symbols)} if args.symbols else {}),
+        # Start from the reference caps so that --capital rescales them instead of
+        # stacking on the ones CONFIG already carries.
+        limits=RiskLimits(),
     )
+    # Portfolio mode overrides: nested dataclass, so replace the whole field.
+    if getattr(args, "portfolio", False):
+        config = replace(config, portfolio=replace(
+            config.portfolio, enabled=True))
+    if getattr(args, "portfolio_cadence", None) is not None:
+        config = replace(config, portfolio=replace(
+            config.portfolio, rebalance_cadence=args.portfolio_cadence))
     if style == "intraday":
         # Only stop-loss and bar-age budgets change; the exposure and order
         # caps inside intraday_limits() are the configured values, unchanged.
@@ -179,6 +196,14 @@ def main() -> int:
         return 2
 
     config = build_config(args)
+
+    # A long-lived run snapshots the ledger first: the lock is held, so this is
+    # the one moment the file is guaranteed to be idle. Short runs skip it, or a
+    # dev loop would fill data/backups with one snapshot per iteration.
+    if (args.serve or args.forever) and not args.no_backup:
+        snapshot = backup_database(args.db)
+        if snapshot is not None:
+            logger.info("ledger snapshot: %s", snapshot)
 
     quotes = None if args.no_realtime else _quote_service(config)
 
@@ -240,6 +265,16 @@ def main() -> int:
         return 0
 
     logger.info("mode=paper strategy=%s symbols=%s", config.strategy_name, ",".join(config.symbols))
+    if config.portfolio.enabled:
+        logger.info(
+            "portfolio: enabled top_n=%d lookback=%d skip=%d vol_target=%.0f%% "
+            "max_position=%.0f%% max_sector=%.0f%% trailing=%.0f%% take_profit=%.0f%% "
+            "mdd_breaker=%.0f%% cadence=%s",
+            config.portfolio.top_n, config.portfolio.lookback, config.portfolio.skip,
+            config.portfolio.vol_target * 100, config.portfolio.max_position_pct * 100,
+            config.portfolio.max_sector_pct * 100, config.portfolio.trailing_stop_pct * 100,
+            config.portfolio.take_profit_pct * 100, config.portfolio.mdd_circuit_breaker_pct * 100,
+            config.portfolio.rebalance_cadence)
     logger.info("realtime quotes: %s", "off" if quotes is None else "on")
     logger.info(
         "limits: max_position=%.0f max_exposure=%.0f max_daily_loss=%.0f stop_loss=%.1f%%",

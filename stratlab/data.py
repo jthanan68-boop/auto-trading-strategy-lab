@@ -45,7 +45,7 @@ REQUIRED_COLUMNS = ["open", "high", "low", "close"]
 class Instrument:
     symbol: str
     name: str
-    asset_class: str  # "equity" | "index" | "crypto"
+    asset_class: str  # "equity" | "index" | "crypto" | "commodity" | "metal" | "fx"
     yfinance_symbol: str
     annual_factor: int = 252
 
@@ -64,6 +64,19 @@ UNIVERSE: list[Instrument] = [
     Instrument("SBIN", "State Bank of India", "equity", "SBIN.NS"),
     Instrument("BTC", "Bitcoin", "crypto", "BTC-USD", annual_factor=365),
     Instrument("ETH", "Ethereum", "crypto", "ETH-USD", annual_factor=365),
+    # Added for round-the-clock coverage: crypto is the only class here with no
+    # session and no weekend, so these keep the book working when NSE is shut.
+    # Every one is quoted on Binance too, which is where the live tick comes from.
+    Instrument("SOL", "Solana", "crypto", "SOL-USD", annual_factor=365),
+    Instrument("XRP", "XRP", "crypto", "XRP-USD", annual_factor=365),
+    Instrument("ADA", "Cardano", "crypto", "ADA-USD", annual_factor=365),
+    Instrument("DOGE", "Dogecoin", "crypto", "DOGE-USD", annual_factor=365),
+    Instrument("AVAX", "Avalanche", "crypto", "AVAX-USD", annual_factor=365),
+    Instrument("LINK", "Chainlink", "crypto", "LINK-USD", annual_factor=365),
+    Instrument("DOT", "Polkadot", "crypto", "DOT-USD", annual_factor=365),
+    Instrument("LTC", "Litecoin", "crypto", "LTC-USD", annual_factor=365),
+    Instrument("BCH", "Bitcoin Cash", "crypto", "BCH-USD", annual_factor=365),
+    Instrument("TRX", "TRON", "crypto", "TRX-USD", annual_factor=365),
 ]
 
 def _equity(symbol: str, name: str) -> Instrument:
@@ -112,6 +125,55 @@ NIFTY_BREADTH: list[Instrument] = [
 ]
 
 UNIVERSE = UNIVERSE + NIFTY_BREADTH
+
+# Multi-asset universe: indices, commodities, metals, oil, FX.
+MULTI_ASSET: list[Instrument] = [
+    # Cash indices
+    Instrument("SPX", "S&P 500", "index", "^GSPC"),
+    Instrument("DJI", "Dow Jones", "index", "^DJI"),
+    Instrument("NASDAQ", "Nasdaq Composite", "index", "^IXIC"),
+    Instrument("FTSE", "FTSE 100", "index", "^FTSE"),
+    Instrument("NIKKEI", "Nikkei 225", "index", "^N225"),
+    Instrument("HSI", "Hang Seng", "index", "^HSI"),
+    Instrument("STOXX50", "Euro Stoxx 50", "index", "^STOXX50E"),
+    # Commodities - energy / oil
+    Instrument("CL", "WTI Crude Oil", "commodity", "CL=F"),
+    Instrument("BRENT", "Brent Crude Oil", "commodity", "BZ=F"),
+    Instrument("NATGAS", "Natural Gas", "commodity", "NG=F"),
+    # Commodities - metals
+    Instrument("GOLD", "Gold", "metal", "GC=F"),
+    Instrument("SILVER", "Silver", "metal", "SI=F"),
+    Instrument("COPPER", "Copper", "metal", "HG=F"),
+    Instrument("PLATINUM", "Platinum", "metal", "PL=F"),
+    Instrument("PALLADIUM", "Palladium", "metal", "PA=F"),
+    # FX - majors
+    Instrument("EURUSD", "Euro / US Dollar", "fx", "EURUSD=X"),
+    Instrument("GBPUSD", "British Pound / US Dollar", "fx", "GBPUSD=X"),
+    Instrument("USDJPY", "US Dollar / Japanese Yen", "fx", "USDJPY=X"),
+    Instrument("AUDUSD", "Australian Dollar / US Dollar", "fx", "AUDUSD=X"),
+    Instrument("USDCAD", "US Dollar / Canadian Dollar", "fx", "USDCAD=X"),
+    Instrument("USDCHF", "US Dollar / Swiss Franc", "fx", "USDCHF=X"),
+    Instrument("NZDUSD", "New Zealand Dollar / US Dollar", "fx", "NZDUSD=X"),
+    # FX - minors
+    Instrument("EURGBP", "Euro / British Pound", "fx", "EURGBP=X"),
+    Instrument("EURJPY", "Euro / Japanese Yen", "fx", "EURJPY=X"),
+    Instrument("GBPJPY", "British Pound / Japanese Yen", "fx", "GBPJPY=X"),
+    # FX - TRY
+    Instrument("EURTRY", "Euro / Turkish Lira", "fx", "EURTRY=X"),
+    Instrument("USDTRY", "US Dollar / Turkish Lira", "fx", "USDTRY=X"),
+    # FX - exotics / USD crosses
+    Instrument("USDMXN", "US Dollar / Mexican Peso", "fx", "USDMXN=X"),
+    Instrument("USDZAR", "US Dollar / South African Rand", "fx", "USDZAR=X"),
+    Instrument("USDSGD", "US Dollar / Singapore Dollar", "fx", "USDSGD=X"),
+    Instrument("USDHKD", "US Dollar / Hong Kong Dollar", "fx", "USDHKD=X"),
+]
+
+# Commodities and FX trade: they have their own sessions in stratlab.calendar.
+# The US cash indices are deliberately left out: "index" is already the NSE class
+# (NIFTY50), so they would inherit Indian hours instead of New York's.
+UNIVERSE = UNIVERSE + [
+    i for i in MULTI_ASSET if i.asset_class in {"commodity","metal","fx","index"}
+]
 
 BY_SYMBOL = {i.symbol: i for i in UNIVERSE}
 BROAD_SYMBOLS = [i.symbol for i in NIFTY_BREADTH]

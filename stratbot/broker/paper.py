@@ -11,7 +11,8 @@ import random
 from dataclasses import dataclass
 from typing import Protocol
 
-from stratlab.costs import INTRADAY, MARKET, cost_model_for
+from stratlab import data as price_data
+from stratlab.costs import INTRADAY, MARKET, CostModel, cost_model_for
 
 from ..models import (
     AccountState,
@@ -66,7 +67,8 @@ class PaperBroker:
 
     def __init__(self, initial_cash: float = 500_000.0, positions: dict[str, Position] | None = None,
                  execution_model: ExecutionModel | None = None,
-                 trading_style: str = "daily"):
+                 trading_style: str = "daily",
+                 cost_models: dict[str, CostModel] | None = None):
         self.cash = float(initial_cash)
         self.positions: dict[str, Position] = dict(positions) if positions else {}
         self.orders: dict[str, OrderStatus] = {}
@@ -77,7 +79,20 @@ class PaperBroker:
         # Fee regime follows the style: an intraday session trade settles with
         # sell-side-only STT and a smaller stamp duty, not delivery rates.
         self.trading_style = trading_style
+        # The engine's per-symbol models. Without them this charged India equity
+        # costs on every fill, including FX and futures, which pay none of it.
+        self.cost_models = cost_models or {}
         self._rng = random.Random(execution_model.seed) if execution_model else None
+
+    def _cost_model(self, symbol: str):
+        model = self.cost_models.get(symbol)
+        if model is not None:
+            return model
+        instrument = price_data.BY_SYMBOL.get(symbol)
+        return cost_model_for(
+            instrument.asset_class if instrument else "equity",
+            market=INTRADAY if self.trading_style == "intraday" else MARKET,
+        )
 
     # ---- account --------------------------------------------------------
     def get_account(self) -> AccountState:
@@ -99,10 +114,7 @@ class PaperBroker:
             status = self.orders[order_id]
             return status, None
 
-        cost = cost_model_for(
-            "crypto" if request.symbol in {"BTC", "ETH"} else "equity",
-            market=INTRADAY if self.trading_style == "intraday" else MARKET,
-        )
+        cost = self._cost_model(request.symbol)
         reference = execution_price if execution_price > 0 else request.reference_price
         # Slippage is applied once, here. The risk layer sizes quantities at the
         # fill price rather than the reference, so charging it again downstream
@@ -129,7 +141,7 @@ class PaperBroker:
                     return OrderStatus.REJECTED, None
                 request.qty = affordable
             self.cash -= notional + fees
-            self._apply_fill(request.symbol, request.qty, price, add=True)
+            self._apply_fill(request.symbol, request.qty, price, add=True, fees=fees)
         else:
             position = self.positions.get(request.symbol)
             if position is None or position.qty < request.qty:
@@ -155,15 +167,27 @@ class PaperBroker:
         self.orders[order_id] = OrderStatus.FILLED
         return OrderStatus.FILLED, fill
 
-    def _apply_fill(self, symbol: str, qty: float, price: float, add: bool):
+    def _apply_fill(self, symbol: str, qty: float, price: float, add: bool,
+                    fees: float = 0.0):
         position = self.positions.get(symbol) or Position(symbol=symbol)
         if add:
+            was_flat = not position.is_open()
             total = position.cost_basis + qty * price
             position.qty += qty
             position.avg_price = total / position.qty if position.qty else 0.0
+            if was_flat:
+                # A flat row restored from the ledger can still carry the last
+                # lot's open time; a fresh entry must not inherit it.
+                position.opened_at = utcnow()
+                position.entry_fees = 0.0
             position.opened_at = position.opened_at or utcnow()
+            position.entry_fees += fees
         else:
             position.qty -= qty
+            if not position.is_open():
+                # Flat again, so the next entry starts with its own fees.
+                position.entry_fees = 0.0
+                position.opened_at = None
         position.last_price = price
         self.positions[symbol] = position
 

@@ -41,7 +41,9 @@ export function PriceChart({ bars, symbol }: { bars: Bar[]; symbol: string }) {
     const seen = new Map<UTCTimestamp, Bar>();
     for (const bar of bars) {
       const stamp = bar.ts.endsWith("Z") ? bar.ts : `${bar.ts}Z`;
-      seen.set(Math.floor(new Date(stamp).getTime() / 1000) as UTCTimestamp, bar);
+      const d = new Date(stamp);
+      if (isNaN(d.getTime())) continue;
+      seen.set(Math.floor(d.getTime() / 1000) as UTCTimestamp, bar);
     }
 
     const candles: Candle[] = [...seen.entries()]

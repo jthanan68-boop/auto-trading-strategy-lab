@@ -138,6 +138,26 @@ export interface RiskEvent {
   detail: string;
 }
 
+export interface Portfolio {
+  enabled: boolean;
+  top_n: number;
+  lookback: number;
+  skip: number;
+  vol_target: number;
+  max_position_pct: number;
+  max_sector_pct: number;
+  rebalance_cadence: string;
+  trailing_stop_pct: number;
+  take_profit_pct: number;
+  mdd_circuit_breaker_pct: number;
+  last_rebalance: string | null;
+  targets: Record<string, number>;
+  scores: [string, number][];
+  peak_equity: number | null;
+  high_water: Record<string, number>;
+  entry_price: Record<string, number>;
+}
+
 export interface Bar {
   ts: string;
   open: number;
@@ -165,6 +185,7 @@ export const api = {
   fills: () => get<Fill[]>("/api/orders"),
   pendingOrders: () => get<Order[]>("/api/pending-orders"),
   riskEvents: () => get<RiskEvent[]>("/api/risk-events"),
+  portfolio: () => get<Portfolio>("/api/portfolio"),
   bars: (symbol: string, limit = 180) =>
     get<{ symbol: string; bars: Bar[] }>(`/api/bars/${encodeURIComponent(symbol)}?limit=${limit}`),
 

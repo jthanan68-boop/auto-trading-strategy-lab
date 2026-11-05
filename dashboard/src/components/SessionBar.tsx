@@ -62,6 +62,14 @@ export function SessionBar({ bars, symbol }: { bars: Bar[]; symbol: string }) {
 
   const stamp = newest.ts.endsWith("Z") ? newest.ts : `${newest.ts}Z`;
   const barDate = new Date(stamp);
+  if (isNaN(barDate.getTime())) {
+    return (
+      <div className="session">
+        <span className="session-key">Session</span>
+        <span className="session-text muted">Invalid bar timestamp for {symbol}</span>
+      </div>
+    );
+  }
   const crypto = CRYPTO.has(symbol);
   const end = sessionEnd(barDate, crypto);
   const forming = now < end.getTime();

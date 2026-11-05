@@ -79,6 +79,40 @@ def test_bars_endpoint_respects_limit(client):
     assert len(client.get("/api/bars/BTC?limit=10").json()["bars"]) <= 10
 
 
+def test_bars_endpoint_folds_the_intraday_cache_when_no_daily_file(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from stratlab import data as price_data
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(price_data, "CACHE_DIR", cache)
+    day = pd.Timestamp.today().normalize()
+    index = pd.DatetimeIndex(
+        [day - pd.Timedelta(days=1) + pd.Timedelta(minutes=5 * i) for i in range(31)]
+        + [day + pd.Timedelta(minutes=5 * i) for i in range(31)]
+    )
+    closes = [float(i) for i in range(62)]
+    frame = pd.DataFrame(
+        {"open": closes, "high": [c + 1 for c in closes], "low": [c - 1 for c in closes],
+         "close": [c + 0.5 for c in closes], "volume": 1.0},
+        index=index,
+    )
+    frame.index.name = "date"
+    frame.to_csv(cache / "CL.5m.csv")
+
+    db = Database(tmp_path / "fold.sqlite3")
+    config = BotConfig(symbols=("CL",), bar_interval="5m", initial_cash=500_000.0)
+    engine = Engine(config, db, broker=PaperBroker(config.initial_cash))
+    with TestClient(create_app(engine=engine, db=db)) as test_client:
+        body = test_client.get("/api/bars/CL").json()
+
+    assert len(body["bars"]) == 2
+    assert body["bars"][0]["high"] == 31.0, "the day's high must be the max of its bars"
+    assert body["bars"][0]["close"] == 30.5, "the day's close must be its last bar"
+    assert body["bars"][1]["close"] == 61.5
+
+
 def test_built_bundle_does_not_hardcode_a_server_host():
     """A baked-in IP would break the APK; the bundle must stay origin-relative."""
     if not BUILT:

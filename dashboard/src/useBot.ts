@@ -6,6 +6,7 @@ import {
   type Fill,
   type Order,
   type Position,
+  type Portfolio,
   type Quote,
   type RiskEvent,
   type Signal,
@@ -18,6 +19,7 @@ export function useBot() {
   const [status, setStatus] = useState<Status | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [equity, setEquity] = useState<EquityPoint[]>([]);
+  const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [fills, setFills] = useState<Fill[]>([]);
   const [pending, setPending] = useState<Order[]>([]);
@@ -33,11 +35,12 @@ export function useBot() {
 
   const load = useCallback(async () => {
     try {
-      const [s, p, e, sig, f, r, queued] = await Promise.all([
+      const [s, p, e, port, sig, f, r, queued] = await Promise.all([
         api.status(), api.positions(), api.equity(),
+        api.portfolio(),
         api.signals(), api.fills(), api.riskEvents(), api.pendingOrders(),
       ]);
-      setStatus(s); setPositions(p); setEquity(e); setSignals(sig);
+      setStatus(s); setPositions(p); setEquity(e); setPortfolio(port); setSignals(sig);
       setFills(f); setEvents(r); setPending(queued);
       // Quotes are a nicety: a failure here must not take the dashboard down.
       const rows = await api.quotes().catch(() => [] as Quote[]);
@@ -95,7 +98,7 @@ export function useBot() {
   }
 
   return {
-    status, positions, equity, signals, fills, pending, events,
+    status, positions, equity, portfolio, signals, fills, pending, events,
     bars, barsState, quotes, symbol, setSymbol, error, busy, online, load, run,
   };
 }

@@ -41,12 +41,14 @@ from .models import (
     HaltReason,
     OrderRequest,
     OrderStatus,
+    Position,
     Side,
     as_utc,
     utcnow,
 )
 from .reconciler import reconcile
 from .risk import RiskManager
+from .portfolio import PortfolioRiskManager
 
 logger = logging.getLogger("stratbot")
 
@@ -85,29 +87,12 @@ class Engine:
                  feed: MarketDataFeed | None = None, quotes: QuoteService | None = None):
         self.config = config
         self.db = db
-        self.broker = broker or PaperBroker(
-            config.initial_cash, execution_model=config.execution_model,
-            trading_style=config.trading_style,
-        )
-        # Reload the book from the ledger on startup so a restart cannot
-        # create a paper-vs-ledger divergence that trips reconcile.
-        try:
-            restored = self.db.positions()
-        except Exception as exc:
-            logger.error("could not read the open book from the ledger: %s", exc)
-            restored = {}
-        for symbol, position in restored.items():
-            self.broker.positions[symbol] = position
-            # The broker starts on the whole capital, so a position carried over
-            # from an earlier run has to bring the cash it already cost with it.
-            # Without this, equity counts the position twice.
-            if position.is_open():
-                self.broker.cash -= position.cost_basis
-        self.risk = RiskManager(db, config.limits)
-        from stratlab.costs import cost_model_for
+        from stratlab.costs import MARKET, cost_model_for
 
         if config.trading_style == "intraday":
             from stratlab.costs import INTRADAY as INTRADAY_MARKET
+
+            market = INTRADAY_MARKET
 
             # Session trades carry intraday STT (sell-side only) and a smaller
             # stamp duty; a crypto member keeps the spot model, which is the
@@ -121,7 +106,35 @@ class Engine:
                 "crypto" if has_crypto else "equity", market=INTRADAY_MARKET,
             )
         else:
+            market = MARKET
             self.cost_model = cost_model_for("crypto" if "BTC" in config.symbols else "equity")
+        # Costs follow the instrument: a mixed book must not charge equity STT on an FX or
+        # futures fill, which the single book-wide model above would do.
+        self.cost_models = {
+            symbol: cost_model_for(
+                (price_data.BY_SYMBOL[symbol].asset_class
+                 if symbol in price_data.BY_SYMBOL else "equity"),
+                market=market,
+            )
+            for symbol in config.symbols
+        }
+        self.broker = broker or PaperBroker(
+            config.initial_cash, execution_model=config.execution_model,
+            trading_style=config.trading_style, cost_models=self.cost_models,
+        )
+        # Reload the book from the ledger on startup so a restart cannot
+        # create a paper-vs-ledger divergence that trips reconcile.
+        try:
+            restored = self.db.positions()
+        except Exception as exc:
+            logger.error("could not read the open book from the ledger: %s", exc)
+            restored = {}
+        for symbol, position in restored.items():
+            self.broker.positions[symbol] = position
+        if not broker:
+            self.broker.cash = self._restored_cash(restored)
+        self.risk = RiskManager(db, config.limits)
+        self.portfolio = PortfolioRiskManager(config.portfolio, db)
         self.feed = feed or MarketDataFeed(
             config.symbols, refresh_interval_minutes=config.refresh_interval_minutes,
             **({"interval": config.bar_interval, "days_history": config.days_history}
@@ -169,8 +182,26 @@ class Engine:
         for symbol, position in self.broker.positions.items():
             if position.is_open() and symbol not in self._open_lots:
                 self._open_lots[symbol] = (
-                    position.avg_price, position.qty, position.opened_at, 0.0,
+                    position.avg_price, position.qty, position.opened_at,
+                    position.entry_fees,
                 )
+
+    def _restored_cash(self, restored: dict[str, Position]) -> float:
+        """Cash rebuilt by replaying the fill ledger.
+
+        The previous path started from the full capital and subtracted each open
+        position's cost basis, which refunded that position's entry fees on every
+        restart and dropped all realised profit out of equity. Replaying the
+        signed fill legs is the same arithmetic the broker applied, so a restart
+        lands on the cash it would have had without one.
+        """
+        try:
+            flow = self.db.cash_flow()
+        except Exception as exc:
+            logger.error("could not rebuild cash from the fill ledger: %s", exc)
+            return self.config.initial_cash - sum(
+                p.cost_basis for p in restored.values() if p.is_open())
+        return self.config.initial_cash + flow
 
     # ---- helpers --------------------------------------------------------
     def _history(self, symbol: str) -> "pd.DataFrame":  # noqa: F821
@@ -298,7 +329,10 @@ class Engine:
     def _fill(self, request: OrderRequest, bar: Bar, price: float) -> str:
         """Fill a pending order at the execution bar's open."""
         bypass_risk = request.strategy in IMMEDIATE_STRATEGIES
-        if not bypass_risk and request.side is Side.BUY:
+        # In portfolio mode the entry came from a portfolio target, so the
+        # per-symbol strategy is not its authority and must not veto it.
+        revalidate = not self.config.portfolio.enabled
+        if not bypass_risk and revalidate and request.side is Side.BUY:
             strategy = self.strategies.get(request.symbol)
             if getattr(strategy, "fill_revalidate", False):
                 # Rechecks the setup on the newest completed bar; fail open on error.
@@ -325,7 +359,9 @@ class Engine:
             return "cancelled: target already reached"
 
         if not bypass_risk:
-            decision = self.risk.check(request, account, bar, self.cost_model, price=price)
+            decision = self.risk.check(request, account, bar,
+                                       self.cost_models.get(request.symbol, self.cost_model),
+                                       price=price)
             if not decision.approved:
                 # A volume-gate refusal gets its own status: the order was fine,
                 # the window is full. It stays terminal (no retry machinery) and
@@ -446,7 +482,8 @@ class Engine:
         """
         if not bypass_risk:
             account = self.broker.get_account()
-            decision = self.risk.check(request, account, bar, self.cost_model)
+            decision = self.risk.check(request, account, bar,
+                                       self.cost_models.get(request.symbol, self.cost_model))
             if not decision.approved:
                 self._record(request, OrderStatus.REJECTED, decision.reason)
                 self.db.log_risk_event("order_rejected", f"{request.symbol} {request.side.value}: {decision.reason}")
@@ -505,6 +542,13 @@ class Engine:
                 gates[symbol] = bool(live.get(instrument.asset_class, False))
         return gates
 
+    def _session_open(self, symbol: str) -> bool:
+        """True while the symbol's session is running; a closed market cannot make a bar late."""
+        instrument = price_data.BY_SYMBOL.get(symbol)
+        if instrument is None:
+            return False
+        return session_state(utcnow().replace(tzinfo=None), instrument.asset_class) == "active"
+
     # ---- main cycle -----------------------------------------------------
     def cycle(self) -> CycleResult:
         self.cycle_count += 1
@@ -554,8 +598,9 @@ class Engine:
         gates = self._freshness_gates(bars) if self.config.trading_style == "intraday" else {}
         for symbol, bar in bars.items():
             if gates:
+                # Minutes bind only in session; after the close a healthy bar ages past the budget.
                 freshness = self.risk.check_bar_freshness(
-                    bar, session_live=gates.get(symbol, True))
+                    bar, session_live=gates.get(symbol, True) and self._session_open(symbol))
             else:
                 freshness = self.risk.check_bar_freshness(bar)
             if not freshness.approved:
@@ -577,6 +622,22 @@ class Engine:
         if self.db.reset_day(account.equity):
             decisions.append("new trading day, P/L baseline reset")
 
+        # Portfolio guards: MDD circuit breaker halts the book before any
+        # trading can happen this cycle.
+        if self.config.portfolio.enabled and self.portfolio.check_mdd(account.equity):
+            self.risk.halt(
+                HaltReason.DAILY_LOSS,
+                f"max drawdown circuit breaker: equity {account.equity:.2f} "
+                f"vs peak {self.portfolio._peak(account.equity):.2f}",
+            )
+            account = self.broker.get_account()
+            self.db.record_equity(
+                account.equity, account.cash, account.exposure, account.unrealised
+            )
+            return CycleResult(
+                self.cycle_count, bars, account, decisions, True, self._reason()
+            )
+
         # 4. Stop losses are evaluated before anything is filled, because marking
         # has already repriced the book and a queued entry must not fill into the
         # same gap that just tripped the stop. Which bar may trigger is explicit:
@@ -587,6 +648,15 @@ class Engine:
             account = self.broker.get_account()
             self._queue_stop_losses(account, bars, decisions,
                                     self._closed_bars_for(bars), quotes=quotes)
+
+        # Portfolio guards: trailing stops / take-profit as force exits, then
+        # refresh high-water marks from the latest marks.
+        if self.config.portfolio.enabled and not self.risk.halted:
+            account = self.broker.get_account()
+            quotes = self.live_quotes()
+            self.portfolio.update_high_water(account, bars, quotes)
+            for request in self.portfolio.check_trailing_stops(account, bars, quotes):
+                self._queue_stop_request(request, "trailing-stop", decisions)
 
         # 5. Fill anything whose execution bar has arrived. This runs before new
         # signals so an order signalled on bar t is filled on bar t+1's open and
@@ -604,35 +674,53 @@ class Engine:
             # order is sized, otherwise each symbol keeps bidding for the whole
             # account and re-issuing orders every cycle.
             intents: list[tuple[str, Bar, float, float]] = []
-            for symbol, bar in bars.items():
-                strategy = self.strategies.get(symbol)
-                if strategy is None:
-                    continue
-                try:
-                    history = self._history(symbol)
-                    target = float(strategy.position(history))
-                except Exception as exc:
-                    decisions.append(f"{symbol}: strategy error {exc}")
-                    continue
-
-                if target != target:  # NaN means hold
-                    self._live_targets[symbol] = None
-                    continue
-
-                # The decision is made on the last *finished* bar, so that is the
-                # bar the order is tagged with. `bar` from bars() may still be
-                # forming; its open is a real price, but its close is not a fact
-                # and must never feed a strategy or size an intent.
-                decision_bar = self._closed_bar(symbol, history)
-                if decision_bar is None:
-                    continue
-
-                held = account.positions.get(symbol)
-                held_qty = held.qty if held else 0.0
-                current_weight = held_qty * decision_bar.close / equity
-                intents.append(
-                    (symbol, decision_bar, min(max(target, 0.0), 1.0), current_weight)
+            if self.config.portfolio.enabled:
+                histories = {s: self._history(s) for s in bars}
+                targets = self.portfolio.compute_targets(
+                    histories, account, prices, utcnow()
                 )
+                for symbol, bar in bars.items():
+                    target = min(max(targets.get(symbol, 0.0), 0.0), 1.0)
+                    history = histories[symbol]
+                    decision_bar = self._closed_bar(symbol, history)
+                    if decision_bar is None:
+                        continue
+                    held = account.positions.get(symbol)
+                    held_qty = held.qty if held else 0.0
+                    current_weight = held_qty * decision_bar.close / equity
+                    intents.append(
+                        (symbol, decision_bar, target, current_weight)
+                    )
+            else:
+                for symbol, bar in bars.items():
+                    strategy = self.strategies.get(symbol)
+                    if strategy is None:
+                        continue
+                    try:
+                        history = self._history(symbol)
+                        target = float(strategy.position(history))
+                    except Exception as exc:
+                        decisions.append(f"{symbol}: strategy error {exc}")
+                        continue
+
+                    if target != target:  # NaN means hold
+                        self._live_targets[symbol] = None
+                        continue
+
+                    # The decision is made on the last *finished* bar, so that is the
+                    # bar the order is tagged with. `bar` from bars() may still be
+                    # forming; its open is a real price, but its close is not a fact
+                    # and must never feed a strategy or size an intent.
+                    decision_bar = self._closed_bar(symbol, history)
+                    if decision_bar is None:
+                        continue
+
+                    held = account.positions.get(symbol)
+                    held_qty = held.qty if held else 0.0
+                    current_weight = held_qty * decision_bar.close / equity
+                    intents.append(
+                        (symbol, decision_bar, min(max(target, 0.0), 1.0), current_weight)
+                    )
 
             gross = sum(target for _, _, target, _ in intents)
             # The achievable ceiling is whichever binds first: the configured
@@ -901,6 +989,9 @@ class Engine:
             bar = bars.get(symbol)
             if bar is None:
                 continue
+            instrument = price_data.BY_SYMBOL.get(symbol)
+            if instrument is not None and instrument.asset_class == "crypto":
+                continue  # crypto trades 24/7, no session square-off
             remaining = self._remaining_bars(bar)
             if remaining > self.config.square_off_buffer_bars:
                 continue

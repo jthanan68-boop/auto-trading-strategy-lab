@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from stratbot.broker.paper import ExecutionModel
+from .portfolio import PortfolioConfig
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("STRATBOT_DB", BASE_DIR / "data" / "bot.sqlite3"))
@@ -25,13 +26,14 @@ TRADING_MODE = "paper"
 class RiskLimits:
     """Hard caps enforced by risk.RiskManager on every order.
 
-    Scaled for ₹5,000 starting capital (1/100 of original ₹500,000).
+    Rupee caps are stated at the ₹5,000 reference scale; BotConfig multiplies them by
+    initial_cash / 5_000. Percentages are already scale-free and are never multiplied.
     """
 
-    max_position_value: float = 1_000_000.0      # was 100_000_000.0
-    max_total_exposure: float = 2_500.0          # was 300_000.0, reduced to 50% of capital
-    max_daily_loss: float = 50.0                 # was 10_000.0, reduced to 1% of capital
-    stop_loss_pct: float = 0.03                  # 3% for ₹5K capital (was 8%)
+    max_position_value: float = 1_000_000.0      # 200x the reference capital, so never binds
+    max_total_exposure: float = 2_500.0          # 50% of capital
+    max_daily_loss: float = 50.0                 # 1% of capital
+    stop_loss_pct: float = 0.03                  # 3% stop (was 8%)
     max_orders_per_hour: int = 120
     max_orders_per_day: int = 500
     max_position_pct_of_equity: float = 0.05      # 5% per position max
@@ -73,7 +75,7 @@ def intraday_limits() -> RiskLimits:
 class BotConfig:
     symbols: tuple[str, ...] = ("RELIANCE", "TCS", "INFY", "HDFCBANK", "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK", "LT", "AXISBANK")
     strategy_name: str = "orb-15min"
-    initial_cash: float = 5_000.0
+    initial_cash: float = 500_000.0
     # Symbols' target weights are summed and scaled down to this before any order
     # is sized, so N strategies each asking for 100% cannot request N * 100%.
     max_gross_exposure: float = 1.0
@@ -116,10 +118,37 @@ class BotConfig:
     # queued square-off still fills at an open inside the same session.
     square_off_buffer_bars: int = 3
     limits: RiskLimits = field(default_factory=RiskLimits)
+    # Portfolio-level risk management (Option A). When enabled, per-symbol
+    # directional strategies are replaced by a cross-sectional portfolio:
+    # momentum-ranked, vol-sized, sector-capped, with trailing stops, take
+    # profit, fixed rebalance cadence and a max-drawdown circuit breaker.
+    portfolio: PortfolioConfig = field(default_factory=PortfolioConfig)
 
     @property
     def is_paper(self) -> bool:
         return TRADING_MODE == "paper"
+
+    def __post_init__(self):
+        # Rupee caps track starting capital; the declared values are the ₹5,000 reference.
+        scale = self.initial_cash / 5_000.0
+        if scale != 1.0:
+            from dataclasses import replace as _replace
+            base = RiskLimits()
+            # Only a cap still sitting on its reference value scales; a caller's own number
+            # is absolute. Otherwise dataclasses.replace() multiplies an already-scaled cap
+            # again and --capital silently inflates the risk limits instead of tracking them.
+            def _track(current: float, reference: float) -> float:
+                return current * scale if current == reference else current
+            object.__setattr__(
+                self, "limits",
+                _replace(self.limits,
+                         max_total_exposure=_track(self.limits.max_total_exposure,
+                                                   base.max_total_exposure),
+                         max_daily_loss=_track(self.limits.max_daily_loss,
+                                               base.max_daily_loss),
+                         max_position_value=_track(self.limits.max_position_value,
+                                                   base.max_position_value)),
+            )
 
 
 CONFIG = BotConfig()

@@ -57,7 +57,9 @@ export function EquityChart({ points }: { points: EquityPoint[] }) {
     // The chart needs strictly ascending time; the API makes no such guarantee.
     const seen = new Map<UTCTimestamp, number>();
     for (const point of points) {
-      seen.set(Math.floor(new Date(point.ts).getTime() / 1000) as UTCTimestamp, point.equity);
+      const d = new Date(point.ts);
+      if (isNaN(d.getTime())) continue;
+      seen.set(Math.floor(d.getTime() / 1000) as UTCTimestamp, point.equity);
     }
     const ordered = [...seen.entries()].sort((a, b) => a[0] - b[0]);
 

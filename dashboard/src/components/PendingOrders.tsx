@@ -10,7 +10,8 @@ const DAY = new Intl.DateTimeFormat("en-GB", {
 
 function barDate(stamp: string | null): string {
   if (!stamp) return "--";
-  return DAY.format(new Date(stamp.endsWith("Z") ? stamp : `${stamp}Z`));
+  const d = new Date(stamp.endsWith("Z") ? stamp : `${stamp}Z`);
+  return isNaN(d.getTime()) ? "--" : DAY.format(d);
 }
 
 /**

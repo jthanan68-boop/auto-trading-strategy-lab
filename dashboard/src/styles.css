@@ -395,3 +395,18 @@ tbody tr:hover { background: var(--surface-2); }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* ---- portfolio panel ---- */
+.portfolio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+  font-size: 12.5px;
+}
+.portfolio-row {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px;
+  background: var(--surface);
+}
+.portfolio-key { color: var(--muted); white-space: nowrap; }
+.portfolio-value { font-family: var(--mono); font-weight: 600; color: var(--ink); }

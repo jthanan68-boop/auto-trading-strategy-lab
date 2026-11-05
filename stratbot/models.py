@@ -115,6 +115,9 @@ class Position:
     avg_price: float = 0.0
     opened_at: datetime | None = None
     last_price: float = 0.0
+    # Fees actually paid to build this position. Persisted so a restart can
+    # still book the entry leg when the position is later closed.
+    entry_fees: float = 0.0
 
     @property
     def market_value(self) -> float:

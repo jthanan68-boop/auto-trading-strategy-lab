@@ -1,12 +1,23 @@
 @echo off
+setlocal enabledelayedexpansion
+
+rem Launch StratBot crypto section - 24/7, no session square-off.
+rem Runs independently of start.bat (equities). Separate DB and port.
+
 cd /d "%~dp0"
 
 set "VENV=.venv\Scripts\python.exe"
-set "DB=data\paper_run.sqlite3"
-set "SLEEP=60"
-set "PORT=8000"
+set "DB=data\crypto.sqlite3"
+set "SLEEP=300"
+set "PORT=8001"
 set "DASHBOARD=dashboard\dist\index.html"
-set "SYMBOLS=RELIANCE,TCS,INFY,HDFCBANK,ITC,SBIN,BHARTIARTL,KOTAKBANK,LT,AXISBANK"
+set "SYMBOLS=BTC,ETH"
+
+echo.
+echo   StratBot  -  crypto section (24/7)
+echo   ---------------------------------------------
+echo   project: %CD%
+echo.
 
 if not exist "%VENV%" (
   echo   [X] Virtual environment not found: %VENV%
@@ -31,27 +42,15 @@ if not exist "%DASHBOARD%" (
   exit /b 1
 )
 
-rem Set the control token to match the dashboard's VITE_CONTROL_TOKEN
-if "%STRATBOT_CONTROL_TOKEN%"=="" (
-  set "STRATBOT_CONTROL_TOKEN=local-3456721987351200"
-)
-
-echo.
-echo   StratBot  -  paper trading engine
-echo   ---------------------------------------------
-echo   project: %CD%
-echo.
+if "%STRATBOT_CONTROL_TOKEN%"=="" set "STRATBOT_CONTROL_TOKEN=local-3456721987351200"
 
 echo   dashboard : http://127.0.0.1:%PORT%/
 echo   database  : %DB%
-echo   universe  : %SYMBOLS%
+echo   universe  : %SYMBOLS%  (crypto - trades 24/7, no square-off)
 echo   trading   : ON, one cycle every %SLEEP%s in this same process
 echo   mode      : PAPER  (this process cannot place a real order)
 echo.
-echo   The engine decides on completed bars only and fills at the next bar's
-echo   open; NSE quotes arrive about 15 minutes late, so a quiet book during
-echo   a refreshed cache is expected, not a fault.
-echo.
+echo   Crypto positions are never squared off at a session close.
 echo   Press Ctrl+C to stop.
 echo   ---------------------------------------------
 echo.
@@ -59,5 +58,6 @@ echo.
 rem Give uvicorn a moment to bind before the browser asks for the page.
 start "" /b cmd /c "timeout /t 5 /nobreak >nul && start "" http://127.0.0.1:%PORT%/"
 
-rem --refresh: a cold start on empty caches fails closed without it.
-%VENV% run_bot.py --serve --trade --refresh --poll %SLEEP% --db "%DB%" --symbols "%SYMBOLS%" --capital 5000 %*
+"%VENV%" run_bot.py --serve --trade --refresh --poll %SLEEP% --db "%DB%" --symbols "%SYMBOLS%" --style intraday --interval 5m --port %PORT% --portfolio --portfolio-cadence weekly %*
+
+endlocal

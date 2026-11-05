@@ -47,7 +47,7 @@ export function Signals({ signals }: { signals: Signal[] }) {
       <tbody>
         {signals.map((signal) => (
           <tr key={signal.id}>
-            <td className="muted">{new Date(signal.ts).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "medium" })}</td>
+            <td className="muted">{(() => { const d = new Date(signal.ts); return isNaN(d.getTime()) ? "-" : d.toLocaleString("en-IN", { dateStyle: "short", timeStyle: "medium" }) })()}</td>
             <td className="sym">{signal.symbol}</td>
             <td className={signal.action === "BUY" ? "side-buy" : "side-sell"}>{signal.action}</td>
             <td>{signal.price.toFixed(2)}</td>
@@ -70,7 +70,7 @@ export function Fills({ fills }: { fills: Fill[] }) {
       <tbody>
         {fills.map((fill) => (
           <tr key={fill.id}>
-            <td className="muted">{new Date(fill.ts).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "medium" })}</td>
+            <td className="muted">{(() => { const d = new Date(fill.ts); return isNaN(d.getTime()) ? "-" : d.toLocaleString("en-IN", { dateStyle: "short", timeStyle: "medium" }) })()}</td>
             <td className="sym">{fill.symbol}</td>
             <td className={fill.side === "BUY" ? "side-buy" : "side-sell"}>{fill.side}</td>
             <td>{qty(fill.qty)}</td>

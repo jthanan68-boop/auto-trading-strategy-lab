@@ -170,6 +170,12 @@ def create_app(engine: Engine | None = None, db: Database | None = None,
             if p.is_open()
         ]
 
+    @app.get("/api/portfolio")
+    def portfolio():
+        """Portfolio risk-manager state for the dashboard."""
+        pm = engine.portfolio
+        return pm.get_state()
+
     @app.get("/api/quotes")
     def quotes_endpoint():
         """Live prices, with the source that produced them.
@@ -249,6 +255,15 @@ def create_app(engine: Engine | None = None, db: Database | None = None,
             raise HTTPException(404, f"unknown symbol {symbol}")
         try:
             frame = price_data.load(instrument)
+            if frame.empty:
+                # Intraday runs keep only the bar-interval cache; fold it to daily so a
+                # symbol added after the last lab run still charts.
+                interval = getattr(getattr(engine, "config", None), "bar_interval", "5m")
+                frame = price_data.load(instrument, interval=interval)
+                if not frame.empty:
+                    frame = frame.resample("1D").agg(
+                        {"open": "first", "high": "max", "low": "min", "close": "last"}
+                    ).dropna(subset=["open", "high", "low", "close"])
         except Exception as exc:
             raise HTTPException(503, f"price cache unavailable for {symbol}: {exc}")
         tail = frame.tail(max(1, min(limit, 1000)))
@@ -288,7 +303,9 @@ def _mount_dashboard(app: FastAPI) -> None:
         candidate = dist / full_path
         if full_path and candidate.is_file():
             return FileResponse(candidate)
-        return FileResponse(dist / "index.html")
+        # index.html names the hashed bundle; caching it serves a stale UI after a rebuild.
+        return FileResponse(dist / "index.html",
+                            headers={"Cache-Control": "no-cache, must-revalidate"})
 
     app.state.dashboard_built = True
 

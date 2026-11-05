@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ..calendar import session_bounds
+from ..calendar import opening_range_start, session_bounds
 from ..indicators import sma
 
 
@@ -61,9 +61,13 @@ class OpeningRangeBreakout:
         self._position_day = None
 
     def _range_for(self, day: pd.Timestamp, session: pd.DataFrame):
-        start = pd.Timestamp(session_bounds(day.date(), self.asset_class)[0])
-        window = session[(session.index - start)
-                         < pd.Timedelta(minutes=self.range_minutes)]
+        start = pd.Timestamp(opening_range_start(day.date(), self.asset_class))
+        offset = session.index - start
+        # Bars before the anchor are not part of the range. A continuous session
+        # starts at UTC midnight, so an unbounded "before the anchor" test would
+        # pull the whole overnight run into an FX or futures range.
+        window = session[(offset >= pd.Timedelta(0))
+                         & (offset < pd.Timedelta(minutes=self.range_minutes))]
         if len(window) == 0:
             return None
         return float(window["high"].max()), float(window["low"].min())
@@ -90,7 +94,7 @@ class OpeningRangeBreakout:
                 return 0.0
             return 1.0
 
-        start = pd.Timestamp(session_bounds(day.date(), self.asset_class)[0])
+        start = pd.Timestamp(opening_range_start(day.date(), self.asset_class))
         if (bar_ts - start) < pd.Timedelta(minutes=self.range_minutes):
             return 0.0
         if bar["close"] > range_high:
